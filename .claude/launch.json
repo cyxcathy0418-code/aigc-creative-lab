@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "creative-lab",
+      "runtimeExecutable": "C:\\Users\\Catherine\\Desktop\\creative-lab\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py"],
+      "port": 8501
+    }
+  ]
+}
