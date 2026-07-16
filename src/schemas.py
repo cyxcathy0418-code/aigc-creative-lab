@@ -459,7 +459,9 @@ class ABGenerationSettings(StrictBaseModel):
     model: str
     size: Literal["1024x1024", "1024x1536", "1536x1024"] = "1024x1024"
     quality: Literal["low", "medium", "high"] = "medium"
-    samples_per_arm: Literal[1] = 1
+    # 每臂样本数。2 用于扩样本实验（每臂 n=12 时 Mann-Whitney 才有意义）；
+    # 暂不开放 3+，样本翻倍即成本翻倍，且现阶段没有需要它的实验设计。
+    samples_per_arm: Literal[1, 2] = 1
 
     @field_validator("model", mode="before")
     @classmethod

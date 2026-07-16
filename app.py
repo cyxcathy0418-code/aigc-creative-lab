@@ -8,6 +8,7 @@ from typing import Any
 import streamlit as st
 from pydantic import ValidationError
 
+from src.ab_eval import blind_mapping
 from src.ab_experiment import (
     build_experiment_fingerprint,
     build_experiment_zip,
@@ -15,6 +16,7 @@ from src.ab_experiment import (
     get_experiment_dir,
     list_experiment_ids,
     load_experiment_by_id,
+    samples_per_arm,
     save_manual_scores,
 )
 from src.config import configure_langsmith, get_settings
@@ -35,6 +37,8 @@ DIMENSION_LABELS = {
     "silhouette": "轮廓比例",
     "distinctive_details": "独特部件",
 }
+# 人工评分表的列名。刻意不用 "Arm A / Arm B"——评分者一旦知道哪列是锚定组，就不是盲评了。
+MANUAL_COLUMNS = ("候选 X", "候选 Y")
 
 
 def _init_page() -> None:
@@ -1342,10 +1346,25 @@ def _render_ab_experiment(creatives_data: list[dict[str, Any]]) -> None:
                 key="ab_image_quality",
                 on_change=_invalidate_ab_results,
             )
+            sample_count = st.selectbox(
+                "每臂样本数",
+                options=[1, 2],
+                key="ab_samples_per_arm",
+                on_change=_invalidate_ab_results,
+                help=(
+                    "同一 Prompt 独立生成几张图。1 用于快速定性演示；"
+                    "2 用于扩样本实验——配合多类商品可把每臂样本数堆到统计检验所需规模。"
+                    "样本数翻倍，本次图片数与成本也翻倍。"
+                ),
+            )
             settings = get_settings()
             st.caption(f"Image model · {settings.openai_image_model}  |  Judge · {settings.openai_judge_model}")
-            image_count = len(selected_markets) * 2
-            st.metric("本次最多生成", f"{image_count} 张", help="市场数 × 2 个实验臂 × 每臂 1 张")
+            image_count = len(selected_markets) * 2 * sample_count
+            st.metric(
+                "本次最多生成",
+                f"{image_count} 张",
+                help=f"市场数 × 2 个实验臂 × 每臂 {sample_count} 张",
+            )
             cost_confirmed = st.checkbox(
                 "我确认本次会调用付费图像 API",
                 key="ab_cost_confirmed",
@@ -1371,7 +1390,7 @@ def _render_ab_experiment(creatives_data: list[dict[str, Any]]) -> None:
         model=get_settings().openai_image_model,
         size=size,
         quality=quality,
-        samples_per_arm=1,
+        samples_per_arm=sample_count,
     )
     current_fingerprint: str | None = None
     if selected_markets:
@@ -1454,6 +1473,8 @@ def _normalize_ab_widget_state(markets: list[str], source_image_count: int) -> N
         st.session_state["ab_image_size"] = "1024x1024"
     if st.session_state.get("ab_image_quality") not in {"low", "medium", "high"}:
         st.session_state["ab_image_quality"] = "medium"
+    if st.session_state.get("ab_samples_per_arm") not in {1, 2}:
+        st.session_state["ab_samples_per_arm"] = 1
     primary = st.session_state.get("ab_primary_reference_index", 0)
     if not isinstance(primary, int) or primary < 0 or primary >= source_image_count:
         st.session_state["ab_primary_reference_index"] = 0
@@ -1467,40 +1488,59 @@ def _render_ab_results(manifest: dict[str, Any]) -> None:
         "evaluation_partial": "部分自动评分失败，可再次运行以只补失败项",
         "complete": "生成与盲评完成",
     }.get(manifest.get("status"), manifest.get("status", "未知"))
+    sample_count = samples_per_arm(manifest)
     st.markdown("### Experiment Results")
-    st.caption(f"Experiment · {manifest['experiment_id']}  |  Status · {status_text}")
+    st.caption(
+        f"Experiment · {manifest['experiment_id']}  |  Status · {status_text}"
+        f"  |  每臂样本 · {sample_count}"
+    )
 
     for error in manifest.get("generation_errors", []):
-        st.error(f"{error['market']} / Arm {error['arm']} 生成失败：{error['error']}")
+        sample_note = f" / 样本 {error['sample']}" if error.get("sample") else ""
+        st.error(f"{error['market']} / Arm {error['arm']}{sample_note} 生成失败：{error['error']}")
     for error in manifest.get("evaluation_errors", []):
         market = f" / {error['market']}" if error.get("market") else ""
-        st.error(f"{error['stage']}{market} 评分失败：{error['error']}")
+        sample_note = f" / 样本 {error['sample']}" if error.get("sample") else ""
+        st.error(f"{error['stage']}{market}{sample_note} 评分失败：{error['error']}")
 
-    for market in manifest["selected_markets"]:
-        st.markdown(f"#### {market}")
-        arm_columns = st.columns(2, gap="large")
-        for column, arm in zip(arm_columns, ("A", "B")):
-            with column:
-                label = "Arm A · Control" if arm == "A" else "Arm B · Spec Anchor"
-                st.caption(label)
-                metadata = manifest.get("images", {}).get(market, {}).get(arm)
-                if metadata:
-                    image_path = experiment_dir / Path(metadata["relative_path"])
-                    st.image(str(image_path), width="stretch")
-                else:
-                    st.warning("图片尚未生成。")
-                with st.expander("查看本臂 Prompt"):
-                    st.code(manifest["prompt_pairs"][market][arm], language="text")
-        _render_judge_score_block(
-            title=f"{market} · 商品还原度盲评分",
-            score_group=manifest.get("evaluations", {}).get("fidelity", {}).get(market, {}),
-        )
+    _render_manual_scoring(manifest, experiment_dir)
 
-    _render_judge_score_block(
-        title="跨市场商品一致性盲评分",
-        score_group=manifest.get("evaluations", {}).get("consistency", {}),
+    # 人工盲评在上、按臂揭示在下，且默认关闭：只要页面上标着 "Arm A · Control"，
+    # 评分者就能把候选 X/Y 对回实验臂，人工盲评立刻名存实亡。
+    reveal = st.toggle(
+        "显示实验臂标签、Prompt 与 LLM 盲评分",
+        value=False,
+        key=f"ab_reveal_{manifest['experiment_id']}",
+        help="⚠️ 打开后即可看到哪张图来自哪个实验臂，会破坏人工盲评。请在完成人工评分后再打开。",
     )
-    _render_manual_scoring(manifest)
+    if reveal:
+        evaluations = manifest.get("evaluations", {})
+        for market in manifest["selected_markets"]:
+            st.markdown(f"#### {market}")
+            for sample_index in range(sample_count):
+                if sample_count > 1:
+                    st.caption(f"样本 {sample_index + 1} / {sample_count}")
+                arm_columns = st.columns(2, gap="large")
+                for column, arm in zip(arm_columns, ("A", "B")):
+                    with column:
+                        st.caption("Arm A · Control" if arm == "A" else "Arm B · Spec Anchor")
+                        _render_generated_image(
+                            experiment_dir, manifest, market, arm, sample_index
+                        )
+            prompt_columns = st.columns(2, gap="large")
+            for column, arm in zip(prompt_columns, ("A", "B")):
+                with column:
+                    with st.expander(f"查看 Arm {arm} Prompt"):
+                        st.code(manifest["prompt_pairs"][market][arm], language="text")
+            _render_judge_score_block(
+                title=f"{market} · 商品还原度盲评分",
+                entries=evaluations.get("fidelity", {}).get(market, []),
+            )
+
+        _render_judge_score_block(
+            title="跨市场商品一致性盲评分",
+            entries=evaluations.get("consistency", []),
+        )
 
     action_col, meta_col = st.columns([1, 2])
     with action_col:
@@ -1515,34 +1555,81 @@ def _render_ab_results(manifest: dict[str, Any]) -> None:
         st.caption("ZIP 包含真实参考图、两臂生成图、Spec、Prompt、模型参数、盲评与人工评分 manifest。")
 
 
-def _render_judge_score_block(title: str, score_group: dict[str, Any]) -> None:
-    if not ("A" in score_group and "B" in score_group):
+def _render_generated_image(
+    experiment_dir: Path,
+    manifest: dict[str, Any],
+    market: str,
+    arm: str,
+    sample_index: int,
+) -> None:
+    metadata = _image_metadata(manifest, market, arm, sample_index)
+    if metadata:
+        st.image(str(experiment_dir / Path(metadata["relative_path"])), width="stretch")
+    else:
+        st.warning("图片尚未生成。")
+
+
+def _image_metadata(
+    manifest: dict[str, Any],
+    market: str,
+    arm: str,
+    sample_index: int,
+) -> dict[str, Any] | None:
+    samples = manifest.get("images", {}).get(market, {}).get(arm) or []
+    return samples[sample_index] if sample_index < len(samples) else None
+
+
+def _render_judge_score_block(title: str, entries: Any) -> None:
+    scored = [entry for entry in (entries or []) if _has_both_arms(entry)]
+    if not scored:
         return
     st.markdown(f"**{title}**")
-    arm_a_dimensions = _brand_marking_score_dimensions(score_group["A"])
-    arm_b_dimensions = _brand_marking_score_dimensions(score_group["B"])
+    if len(scored) > 1:
+        st.caption(
+            f"下表为 {len(scored)} 个样本的均值。各样本的原始分与理由见下方展开项，"
+            "统计检验请用 ZIP 里 manifest 的逐样本原始分，不要用这里的均值。"
+        )
     rows = [
         {
-            "维度": DIMENSION_LABELS[key],
-            "Arm A": arm_a_dimensions[key]["score"],
-            "Arm B": arm_b_dimensions[key]["score"],
+            "维度": label,
+            "Arm A": _mean_dimension_score(scored, "A", key),
+            "Arm B": _mean_dimension_score(scored, "B", key),
         }
-        for key in DIMENSION_LABELS
+        for key, label in DIMENSION_LABELS.items()
     ]
     rows.append(
         {
             "维度": "平均分",
-            "Arm A": score_group["A"]["overall"],
-            "Arm B": score_group["B"]["overall"],
+            "Arm A": _mean_overall(scored, "A"),
+            "Arm B": _mean_overall(scored, "B"),
         }
     )
     st.dataframe(rows, hide_index=True, width="stretch")
     with st.expander("查看盲评理由"):
-        for key, label in DIMENSION_LABELS.items():
-            st.markdown(
-                f"**{label}**  A: {arm_a_dimensions[key]['reason']}  |  "
-                f"B: {arm_b_dimensions[key]['reason']}"
-            )
+        for entry in scored:
+            if len(scored) > 1:
+                st.markdown(f"*样本 {entry.get('sample', '?')}*")
+            arm_a_dimensions = _brand_marking_score_dimensions(entry["A"])
+            arm_b_dimensions = _brand_marking_score_dimensions(entry["B"])
+            for key, label in DIMENSION_LABELS.items():
+                st.markdown(
+                    f"**{label}**  A: {arm_a_dimensions[key]['reason']}  |  "
+                    f"B: {arm_b_dimensions[key]['reason']}"
+                )
+
+
+def _has_both_arms(entry: Any) -> bool:
+    return isinstance(entry, dict) and "A" in entry and "B" in entry
+
+
+def _mean_dimension_score(entries: list[dict[str, Any]], arm: str, key: str) -> float:
+    values = [_brand_marking_score_dimensions(entry[arm])[key]["score"] for entry in entries]
+    return round(sum(values) / len(values), 2)
+
+
+def _mean_overall(entries: list[dict[str, Any]], arm: str) -> float:
+    values = [entry[arm]["overall"] for entry in entries]
+    return round(sum(values) / len(values), 2)
 
 
 def _brand_marking_score_dimensions(score: dict[str, Any]) -> dict[str, Any]:
@@ -1552,88 +1639,158 @@ def _brand_marking_score_dimensions(score: dict[str, Any]) -> dict[str, Any]:
     return dimensions
 
 
-def _render_manual_scoring(manifest: dict[str, Any]) -> None:
-    st.markdown("### Human Review / 人工交叉评分")
-    st.caption("按相同五项 rubric 评分。0 表示严重不符或不一致，5 表示高度还原或高度一致。")
-    existing = manifest.get("manual_scores", {})
-    fidelity_scores: dict[str, Any] = {}
+def _render_manual_scoring(manifest: dict[str, Any], experiment_dir: Path) -> None:
+    st.markdown("### Human Review / 人工盲评")
+    st.caption(
+        "按与 LLM 相同的五项 rubric 评分。0 表示严重不符或不一致，5 表示高度还原或高度一致。"
+        "候选 X / Y 与实验臂的对应关系由实验指纹确定性打乱，且与 LLM 盲评使用不同 seed，两者互不影响。"
+    )
+    sample_count = samples_per_arm(manifest)
+    raters = manifest.get("manual_scores", {}).get("raters", {})
+    if raters:
+        st.caption(
+            "已保存的评分者："
+            + "、".join(
+                f"{name}{'（历史数据·非盲评）' if entry.get('blind') is False else ''}"
+                for name, entry in raters.items()
+            )
+        )
+    rater_id = st.text_input(
+        "评分者标识",
+        key=f"manual_rater_{manifest['experiment_id']}",
+        help="多名评审各填不同标识，分数分开存放，用于计算评分者一致性。填入已有标识会覆盖该评分者上次的结果。",
+    ).strip()
+    if not rater_id:
+        st.info("填写评分者标识后开始盲评。多名评审请各自使用不同标识，不要共用。")
+        return
 
+    existing = raters.get(rater_id, {})
+    fidelity_scores: dict[str, list[Any]] = {}
     for market in manifest["selected_markets"]:
-        with st.expander(f"{market} · 商品还原度"):
-            rows = _manual_rows(existing.get("fidelity", {}).get(market, {}))
+        existing_market = existing.get("fidelity", {}).get(market, [])
+        scores: list[Any] = []
+        for sample_index in range(sample_count):
+            mapping = blind_mapping(
+                f"{manifest['fingerprint']}:manual:fidelity:{market}:{sample_index}"
+            )
+            suffix = f" · 样本 {sample_index + 1}" if sample_count > 1 else ""
+            with st.expander(f"{market} · 商品还原度{suffix}"):
+                candidate_columns = st.columns(2, gap="large")
+                for column, candidate_id in zip(candidate_columns, ("X", "Y")):
+                    with column:
+                        st.caption(f"候选 {candidate_id}")
+                        _render_generated_image(
+                            experiment_dir, manifest, market, mapping[candidate_id], sample_index
+                        )
+                edited = st.data_editor(
+                    _manual_rows(_sample_entry(existing_market, sample_index), mapping),
+                    hide_index=True,
+                    width="stretch",
+                    disabled=["维度"],
+                    column_config={
+                        column: st.column_config.NumberColumn(min_value=0, max_value=5, step=1)
+                        for column in MANUAL_COLUMNS
+                    },
+                    key=f"manual_fid_{manifest['experiment_id']}_{rater_id}_{market}_{sample_index}",
+                )
+                scores.append(_manual_rows_to_scores(edited, mapping))
+        fidelity_scores[market] = scores
+
+    consistency_scores: list[Any] = []
+    existing_consistency = existing.get("consistency", [])
+    for sample_index in range(sample_count):
+        mapping = blind_mapping(f"{manifest['fingerprint']}:manual:consistency:{sample_index}")
+        suffix = f" · 样本 {sample_index + 1}" if sample_count > 1 else ""
+        with st.expander(f"跨市场商品一致性{suffix}", expanded=sample_count == 1):
+            for candidate_id in ("X", "Y"):
+                st.caption(f"候选 {candidate_id} · 同一方法在各市场的结果")
+                market_columns = st.columns(len(manifest["selected_markets"]))
+                for column, market in zip(market_columns, manifest["selected_markets"]):
+                    with column:
+                        st.caption(market)
+                        _render_generated_image(
+                            experiment_dir, manifest, market, mapping[candidate_id], sample_index
+                        )
             edited = st.data_editor(
-                rows,
+                _manual_rows(_sample_entry(existing_consistency, sample_index), mapping),
                 hide_index=True,
                 width="stretch",
                 disabled=["维度"],
                 column_config={
-                    "Arm A": st.column_config.NumberColumn(min_value=0, max_value=5, step=1),
-                    "Arm B": st.column_config.NumberColumn(min_value=0, max_value=5, step=1),
+                    column: st.column_config.NumberColumn(min_value=0, max_value=5, step=1)
+                    for column in MANUAL_COLUMNS
                 },
-                key=f"manual_fidelity_{manifest['experiment_id']}_{market}",
+                key=f"manual_con_{manifest['experiment_id']}_{rater_id}_{sample_index}",
             )
-            fidelity_scores[market] = _manual_rows_to_scores(edited)
+            consistency_scores.append(_manual_rows_to_scores(edited, mapping))
 
-    with st.expander("跨市场商品一致性", expanded=True):
-        consistency_rows = _manual_rows(existing.get("consistency", {}))
-        edited_consistency = st.data_editor(
-            consistency_rows,
-            hide_index=True,
-            width="stretch",
-            disabled=["维度"],
-            column_config={
-                "Arm A": st.column_config.NumberColumn(min_value=0, max_value=5, step=1),
-                "Arm B": st.column_config.NumberColumn(min_value=0, max_value=5, step=1),
-            },
-            key=f"manual_consistency_{manifest['experiment_id']}",
-        )
-        consistency_scores = _manual_rows_to_scores(edited_consistency)
-
-    incomplete = consistency_scores is None or any(
-        fidelity_scores.get(market) is None for market in manifest["selected_markets"]
+    incomplete = any(score is None for score in consistency_scores) or any(
+        score is None for scores in fidelity_scores.values() for score in scores
     )
     if incomplete:
-        st.info("人工评分尚未完成：请把每个市场还原度、以及一致性表里的每一格（Arm A / Arm B）都填上 0-5，才能保存。")
-    if st.button("保存人工评分", width="stretch", disabled=incomplete):
+        st.info(
+            "人工评分尚未完成：请把每个还原度表格与一致性表格里的每一格"
+            "（候选 X / 候选 Y）都填上 0-5，才能保存。"
+        )
+    if st.button(
+        "保存人工评分",
+        width="stretch",
+        disabled=incomplete,
+        key=f"manual_save_{manifest['experiment_id']}",
+    ):
         updated = save_manual_scores(
             manifest,
+            rater_id,
             {
                 "fidelity": fidelity_scores,
                 "consistency": consistency_scores,
                 "completed": True,
+                "blind": True,
             },
         )
         st.session_state["ab_experiment_manifest"] = updated
-        st.success("人工评分已写入实验 manifest（completed=true）。")
+        st.success(f"评分者「{rater_id}」的人工盲评已写入 manifest（completed=true, blind=true）。")
 
 
-def _manual_rows(existing: dict[str, Any]) -> list[dict[str, Any]]:
+def _sample_entry(entries: Any, sample_index: int) -> dict[str, Any]:
+    if isinstance(entries, list) and sample_index < len(entries) and entries[sample_index]:
+        return entries[sample_index]
+    return {}
+
+
+def _manual_rows(existing: dict[str, Any], mapping: dict[str, str]) -> list[dict[str, Any]]:
     # 默认留空（None）而非预填分数，避免用户不打分直接保存产生虚假的"人工评分"。
-    arm_a_dimensions = _brand_marking_score_dimensions(existing.get("A", {}))
-    arm_b_dimensions = _brand_marking_score_dimensions(existing.get("B", {}))
+    # existing 按实验臂 A/B 存储，这里按盲映射反查回候选 X/Y 显示。
+    dimensions_by_candidate = {
+        candidate_id: _brand_marking_score_dimensions(existing.get(mapping[candidate_id], {}))
+        for candidate_id in ("X", "Y")
+    }
     return [
         {
             "维度": label,
-            "Arm A": arm_a_dimensions.get(key),
-            "Arm B": arm_b_dimensions.get(key),
+            MANUAL_COLUMNS[0]: dimensions_by_candidate["X"].get(key),
+            MANUAL_COLUMNS[1]: dimensions_by_candidate["Y"].get(key),
         }
         for key, label in DIMENSION_LABELS.items()
     ]
 
 
-def _manual_rows_to_scores(edited: Any) -> dict[str, Any] | None:
-    """所有维度都填了才返回分数；任一格为空则返回 None（视为未完成）。"""
+def _manual_rows_to_scores(edited: Any, mapping: dict[str, str]) -> dict[str, Any] | None:
+    """所有维度都填了才返回分数；任一格为空则返回 None（视为未完成）。
+
+    评分者填的是候选 X/Y，落盘前按盲映射还原成实验臂 A/B，并把映射一并存下来备查。
+    """
     rows = edited.to_dict("records") if hasattr(edited, "to_dict") else list(edited)
     by_label = {row["维度"]: row for row in rows}
-    result: dict[str, Any] = {}
-    for arm, column in (("A", "Arm A"), ("B", "Arm B")):
+    result: dict[str, Any] = {"blind_mapping": mapping}
+    for candidate_id, column in zip(("X", "Y"), MANUAL_COLUMNS):
         dimensions: dict[str, int] = {}
         for key, label in DIMENSION_LABELS.items():
             value = by_label[label][column]
             if value is None or value != value:  # None 或 NaN 表示未填
                 return None
             dimensions[key] = int(value)
-        result[arm] = {
+        result[mapping[candidate_id]] = {
             "dimensions": dimensions,
             "overall": round(sum(dimensions.values()) / len(dimensions), 2),
         }

@@ -8,8 +8,15 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
+import app
 from src.ab_eval import BaseABJudge, JudgeCallResult
-from src.ab_experiment import BaseImageGenerator, build_control_prompt, build_experiment_zip, find_anchor_leaks
+from src.ab_experiment import (
+    BaseImageGenerator,
+    build_control_prompt,
+    build_experiment_zip,
+    find_anchor_leaks,
+    migrate_legacy_single_sample,
+)
 from src.derivation_retry import _build_prompt_artifact
 from src.prompts import build_anchor_block, build_creative_safe_spec_view, format_derivation_prompt
 from src.graph import build_ab_experiment_graph
@@ -22,6 +29,11 @@ from src.schemas import (
     MarketCreative,
     ProductIdentityScores,
     ProductSpec,
+)
+
+
+PNG_1X1_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
 
 
@@ -127,6 +139,88 @@ def _creative(market: str) -> dict:
     ).model_dump()
 
 
+def _ab_app_test() -> AppTest:
+    app_test = AppTest.from_file("app.py")
+    app_test.session_state["generated_spec"] = _spec().model_dump()
+    app_test.session_state["confirmed_spec"] = _spec().model_dump()
+    app_test.session_state["source_images"] = [
+        {
+            "file_name": "product.png",
+            "mime_type": "image/png",
+            "data": base64.b64decode(PNG_1X1_B64),
+            "sha256": "test-image",
+        }
+    ]
+    app_test.session_state["market_creatives"] = [_creative("美国"), _creative("欧洲")]
+    app_test.session_state["derivation_context"] = {
+        "target_markets": ["美国", "欧洲"],
+        "platform": "TikTok",
+        "style_preference": "简约高级",
+    }
+    return app_test
+
+
+def _disk_manifest(root: Path) -> dict:
+    """在磁盘上摆好一个已完成的单样本实验，供渲染测试使用。"""
+    image_bytes = base64.b64decode(PNG_1X1_B64)
+    experiment_id = "exp_render"
+    (root / experiment_id / "generated").mkdir(parents=True)
+    markets = ["美国", "欧洲"]
+    images: dict = {}
+    for market in markets:
+        images[market] = {}
+        for arm in ("A", "B"):
+            relative_path = Path("generated") / f"{market}_arm_{arm}_1.png"
+            (root / experiment_id / relative_path).write_bytes(image_bytes)
+            images[market][arm] = [
+                {
+                    "relative_path": relative_path.as_posix(),
+                    "mime_type": "image/png",
+                    "sha256": f"{market}{arm}",
+                    "size_bytes": len(image_bytes),
+                    "attempts": 1,
+                }
+            ]
+    return {
+        "schema_version": 1,
+        "experiment_id": experiment_id,
+        "fingerprint": "f" * 64,
+        "status": "complete",
+        "selected_markets": markets,
+        "primary_reference_index": 0,
+        "generation_settings": {
+            "model": "fake-image",
+            "size": "1024x1024",
+            "quality": "medium",
+            "samples_per_arm": 1,
+        },
+        "prompt_pairs": {market: {"A": "control prompt", "B": "anchor prompt"} for market in markets},
+        "source_images": [],
+        "images": images,
+        "generation_errors": [],
+        "evaluations": {"fidelity": {}, "consistency": []},
+        "evaluation_errors": [],
+        "manual_scores": {"raters": {}},
+    }
+
+
+def _render_ab_manifest(reveal: bool) -> AppTest:
+    """把一个已完成的实验渲染出来；reveal 控制是否揭示实验臂标签。"""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        manifest = _disk_manifest(root)
+        with patch("src.ab_experiment.ARTIFACTS_ROOT", root):
+            app_test = _ab_app_test()
+            app_test.session_state["ab_experiment_manifest"] = manifest
+            # 标记为「恢复自磁盘」，否则指纹与当前输入不符会被判定失效并清空
+            app_test.session_state["ab_experiment_resumed"] = True
+            # 填了评分者标识才会渲染打分表格
+            app_test.session_state[f"manual_rater_{manifest['experiment_id']}"] = "rater_test"
+            app_test.session_state[f"ab_reveal_{manifest['experiment_id']}"] = reveal
+            app_test.run(timeout=30)
+            return app_test
+
+
 class ABExperimentTests(unittest.TestCase):
     def test_legacy_logo_is_migrated_to_brand_marking(self) -> None:
         spec_data = _spec().model_dump()
@@ -219,30 +313,134 @@ class ABExperimentTests(unittest.TestCase):
             self.assertEqual(judge.fidelity_calls, 2)
             self.assertEqual(judge.consistency_calls, 1)
 
-    def test_streamlit_renders_ab_controls_without_api_calls(self) -> None:
-        image_bytes = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-        )
-        app = AppTest.from_file("app.py")
-        app.session_state["generated_spec"] = _spec().model_dump()
-        app.session_state["confirmed_spec"] = _spec().model_dump()
-        app.session_state["source_images"] = [
-            {
-                "file_name": "product.png",
-                "mime_type": "image/png",
-                "data": image_bytes,
-                "sha256": "test-image",
-            }
-        ]
-        app.session_state["market_creatives"] = [_creative("美国"), _creative("欧洲")]
-        app.session_state["derivation_context"] = {
-            "target_markets": ["美国", "欧洲"],
-            "platform": "TikTok",
-            "style_preference": "简约高级",
+    def test_multi_sample_generates_each_sample_independently_and_scores_each(self) -> None:
+        generator = FakeImageGenerator()
+        judge = FakeJudge()
+        source_images = [{"file_name": "product.png", "mime_type": "image/png", "data": b"product"}]
+        state = {
+            "spec": _spec().model_dump(),
+            "creatives": [_creative("美国"), _creative("欧洲")],
+            "selected_markets": ["美国", "欧洲"],
+            "source_images": source_images,
+            "primary_reference_index": 0,
+            "generation_settings": ABGenerationSettings(
+                model="fake-image",
+                samples_per_arm=2,
+            ).model_dump(),
         }
-        app.run(timeout=30)
-        self.assertEqual(len(app.exception), 0)
-        self.assertIn("运行 A/B 对照", [button.label for button in app.button])
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.ab_experiment.ARTIFACTS_ROOT", Path(directory)
+        ):
+            graph = build_ab_experiment_graph(generator=generator, judge=judge)
+            manifest = graph.invoke(state)["manifest"]
+
+            self.assertEqual(manifest["status"], "complete")
+            self.assertEqual(len(generator.calls), 8)  # 2 市场 × 2 臂 × 2 样本
+            # 每个样本各跑一次独立盲评，而不是把 4 张图塞进一次调用
+            self.assertEqual(judge.fidelity_calls, 4)  # 2 市场 × 2 样本
+            self.assertEqual(judge.consistency_calls, 2)  # 2 样本
+
+            for market in ("美国", "欧洲"):
+                for arm in ("A", "B"):
+                    samples = manifest["images"][market][arm]
+                    self.assertEqual(
+                        [Path(item["relative_path"]).name for item in samples],
+                        [f"{market}_arm_{arm}_1.png", f"{market}_arm_{arm}_2.png"],
+                    )
+                    # 两个样本必须各自独立生成，不能是同一张图被复用
+                    self.assertNotEqual(samples[0]["sha256"], samples[1]["sha256"])
+                self.assertEqual(len(manifest["evaluations"]["fidelity"][market]), 2)
+            self.assertEqual(len(manifest["evaluations"]["consistency"]), 2)
+
+    def test_legacy_single_sample_manifest_migrates_to_lists(self) -> None:
+        legacy = {
+            "images": {
+                "美国": {
+                    "A": {"relative_path": "generated/美国_arm_A.png", "sha256": "a"},
+                    "B": {"relative_path": "generated/美国_arm_B.png", "sha256": "b"},
+                }
+            },
+            "evaluations": {
+                "fidelity": {"美国": {"A": {"overall": 1.0}, "B": {"overall": 4.4}}},
+                "consistency": {"A": {"overall": 4.8}, "B": {"overall": 4.8}},
+            },
+            "manual_scores": {
+                "fidelity": {"美国": {"A": {"overall": 0.8}, "B": {"overall": 4.2}}},
+                "consistency": {"A": {"overall": 4.6}, "B": {"overall": 4.6}},
+                "completed": True,
+            },
+        }
+
+        migrated = migrate_legacy_single_sample(legacy)
+
+        # 旧的单图路径原样保留，旧实验不必重新花钱生成
+        self.assertEqual(
+            migrated["images"]["美国"]["A"],
+            [{"relative_path": "generated/美国_arm_A.png", "sha256": "a"}],
+        )
+        self.assertEqual(len(migrated["evaluations"]["fidelity"]["美国"]), 1)
+        self.assertEqual(len(migrated["evaluations"]["consistency"]), 1)
+
+        rater = migrated["manual_scores"]["raters"]["rater_1"]
+        self.assertTrue(rater["completed"])
+        self.assertEqual(len(rater["fidelity"]["美国"]), 1)
+        self.assertEqual(len(rater["consistency"]), 1)
+        # 旧界面直接显示 Arm A / Arm B，那批人工分不是盲评，迁移必须如实标注
+        self.assertIs(rater["blind"], False)
+
+    def test_manual_scores_are_stored_by_arm_not_by_blind_label(self) -> None:
+        mapping = {"X": "B", "Y": "A"}
+        rows = [
+            {"维度": label, "候选 X": 5, "候选 Y": 1}
+            for label in app.DIMENSION_LABELS.values()
+        ]
+
+        scores = app._manual_rows_to_scores(rows, mapping)
+
+        # 评分者填的是候选 X/Y；落盘必须按盲映射还原成实验臂，否则两臂分数会张冠李戴
+        self.assertEqual(scores["B"]["overall"], 5.0)
+        self.assertEqual(scores["A"]["overall"], 1.0)
+        self.assertEqual(scores["blind_mapping"], mapping)
+
+        # 反向：已存的 A/B 分数回填表格时也要按同一映射还原成 X/Y
+        rebuilt = app._manual_rows(scores, mapping)
+        self.assertEqual(rebuilt[0]["候选 X"], 5)
+        self.assertEqual(rebuilt[0]["候选 Y"], 1)
+
+    def test_manual_scores_reject_incomplete_grid(self) -> None:
+        mapping = {"X": "A", "Y": "B"}
+        rows = [
+            {"维度": label, "候选 X": 3, "候选 Y": None}
+            for label in app.DIMENSION_LABELS.values()
+        ]
+
+        self.assertIsNone(app._manual_rows_to_scores(rows, mapping))
+
+    def test_streamlit_renders_ab_controls_without_api_calls(self) -> None:
+        app_test = _ab_app_test()
+        app_test.run(timeout=30)
+        self.assertEqual(len(app_test.exception), 0)
+        self.assertIn("运行 A/B 对照", [button.label for button in app_test.button])
+
+    def test_manual_scoring_stays_blind_until_arms_are_explicitly_revealed(self) -> None:
+        # 实验臂标签用 st.caption 渲染，只在 AppTest 的 caption 集合里，不在 markdown 里。
+        blind = _render_ab_manifest(reveal=False)
+        revealed = _render_ab_manifest(reveal=True)
+
+        self.assertEqual(len(blind.exception), 0)
+        self.assertEqual(len(revealed.exception), 0)
+
+        blind_captions = " ".join(element.value for element in blind.caption)
+        revealed_captions = " ".join(element.value for element in revealed.caption)
+
+        # 默认状态下评分者只看得到候选 X / Y，看不到哪张来自哪个臂
+        self.assertIn("候选 X", blind_captions)
+        self.assertNotIn("Arm A · Control", blind_captions)
+        self.assertNotIn("Arm B · Spec Anchor", blind_captions)
+        # 只有显式打开揭示开关，才会出现实验臂标签
+        self.assertIn("Arm A · Control", revealed_captions)
+        self.assertIn("Arm B · Spec Anchor", revealed_captions)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,12 @@ from typing import Any
 from openai import OpenAI
 from pydantic import ValidationError
 
-from src.ab_experiment import get_experiment_dir, save_experiment_manifest
+from src.ab_experiment import (
+    get_experiment_dir,
+    migrate_legacy_single_sample,
+    samples_per_arm,
+    save_experiment_manifest,
+)
 from src.config import Settings, get_settings
 from src.retry import parse_json_object
 from src.schemas import BlindJudgeResponse
@@ -163,77 +168,124 @@ def evaluate_ab_experiment(
         return manifest
 
     judge = judge or OpenAIABJudge()
+    manifest = migrate_legacy_single_sample(manifest)
     manifest["judge_model"] = judge.model_name
     manifest["evaluation_errors"] = []
-    evaluations = manifest.setdefault("evaluations", {"fidelity": {}, "consistency": {}})
+    evaluations = manifest.setdefault("evaluations", {"fidelity": {}, "consistency": []})
     experiment_dir = get_experiment_dir(manifest)
     reference_images = _ordered_references(source_images, manifest["primary_reference_index"])
+    sample_count = samples_per_arm(manifest)
 
+    # 每个样本各跑一次独立盲评（裁判每次仍只看 2 张候选图），产出 sample_count 个
+    # 相互独立的数据点。刻意不改成「一次看 2N 张」——那会换掉评分口径，新数据就
+    # 无法和既有实验放在同一把尺子上比。
     for market in manifest["selected_markets"]:
-        existing = evaluations["fidelity"].get(market, {})
-        if "A" in existing and "B" in existing:
-            logger.info("A/B fidelity cache hit experiment=%s market=%s", manifest["experiment_id"], market)
-            continue
-        mapping = _blind_mapping(f"{manifest['fingerprint']}:fidelity:{market}")
-        candidates = {
-            candidate_id: _read_generated_image(experiment_dir, manifest, market, arm)
-            for candidate_id, arm in mapping.items()
-        }
-        try:
-            result = judge.judge_fidelity(reference_images, candidates)
-            by_candidate = {item.candidate_id: item for item in result.parsed.candidates}
-            market_result: dict[str, Any] = {
-                "blind_mapping": mapping,
-                "raw_output": result.raw_output,
-                "attempts": result.attempts,
-            }
-            for candidate_id, arm in mapping.items():
-                market_result[arm] = _serialize_score(by_candidate[candidate_id])
-            evaluations["fidelity"][market] = market_result
-        except Exception as exc:
-            logger.exception("A/B fidelity evaluation failed market=%s", market)
-            manifest["evaluation_errors"].append(
-                {"stage": "fidelity", "market": market, "error": str(exc)}
+        entries = evaluations["fidelity"].setdefault(market, [])
+        for sample_index in range(sample_count):
+            if _is_scored(_entry_at(entries, sample_index)):
+                logger.info(
+                    "A/B fidelity cache hit experiment=%s market=%s sample=%s",
+                    manifest["experiment_id"],
+                    market,
+                    sample_index + 1,
+                )
+                continue
+            mapping = blind_mapping(
+                f"{manifest['fingerprint']}:fidelity:{market}:{sample_index}"
             )
-        save_experiment_manifest(manifest)
+            try:
+                candidates = {
+                    candidate_id: _read_generated_image(
+                        experiment_dir, manifest, market, arm, sample_index
+                    )
+                    for candidate_id, arm in mapping.items()
+                }
+                result = judge.judge_fidelity(reference_images, candidates)
+                by_candidate = {item.candidate_id: item for item in result.parsed.candidates}
+                market_result: dict[str, Any] = {
+                    "sample": sample_index + 1,
+                    "blind_mapping": mapping,
+                    "raw_output": result.raw_output,
+                    "attempts": result.attempts,
+                }
+                for candidate_id, arm in mapping.items():
+                    market_result[arm] = _serialize_score(by_candidate[candidate_id])
+                _set_entry(entries, sample_index, market_result)
+            except Exception as exc:
+                logger.exception(
+                    "A/B fidelity evaluation failed market=%s sample=%s", market, sample_index + 1
+                )
+                manifest["evaluation_errors"].append(
+                    {
+                        "stage": "fidelity",
+                        "market": market,
+                        "sample": sample_index + 1,
+                        "error": str(exc),
+                    }
+                )
+            save_experiment_manifest(manifest)
 
-    consistency = evaluations.get("consistency", {})
-    if not ("A" in consistency and "B" in consistency):
-        mapping = _blind_mapping(f"{manifest['fingerprint']}:consistency")
-        groups = {
-            candidate_id: [
-                _read_generated_image(experiment_dir, manifest, market, arm)
-                for market in manifest["selected_markets"]
-            ]
-            for candidate_id, arm in mapping.items()
-        }
+    consistency_entries = evaluations.setdefault("consistency", [])
+    for sample_index in range(sample_count):
+        if _is_scored(_entry_at(consistency_entries, sample_index)):
+            logger.info(
+                "A/B consistency cache hit experiment=%s sample=%s",
+                manifest["experiment_id"],
+                sample_index + 1,
+            )
+            continue
+        mapping = blind_mapping(f"{manifest['fingerprint']}:consistency:{sample_index}")
         try:
+            groups = {
+                candidate_id: [
+                    _read_generated_image(experiment_dir, manifest, market, arm, sample_index)
+                    for market in manifest["selected_markets"]
+                ]
+                for candidate_id, arm in mapping.items()
+            }
             result = judge.judge_consistency(groups)
             by_candidate = {item.candidate_id: item for item in result.parsed.candidates}
             consistency_result: dict[str, Any] = {
+                "sample": sample_index + 1,
                 "blind_mapping": mapping,
                 "raw_output": result.raw_output,
                 "attempts": result.attempts,
             }
             for candidate_id, arm in mapping.items():
                 consistency_result[arm] = _serialize_score(by_candidate[candidate_id])
-            evaluations["consistency"] = consistency_result
+            _set_entry(consistency_entries, sample_index, consistency_result)
         except Exception as exc:
-            logger.exception("A/B consistency evaluation failed")
+            logger.exception("A/B consistency evaluation failed sample=%s", sample_index + 1)
             manifest["evaluation_errors"].append(
-                {"stage": "consistency", "error": str(exc)}
+                {"stage": "consistency", "sample": sample_index + 1, "error": str(exc)}
             )
+        save_experiment_manifest(manifest)
 
     complete_fidelity = all(
-        "A" in evaluations["fidelity"].get(market, {})
-        and "B" in evaluations["fidelity"].get(market, {})
+        _is_scored(_entry_at(evaluations["fidelity"].get(market, []), sample_index))
         for market in manifest["selected_markets"]
+        for sample_index in range(sample_count)
     )
     complete_consistency = all(
-        arm in evaluations.get("consistency", {}) for arm in ("A", "B")
+        _is_scored(_entry_at(consistency_entries, sample_index))
+        for sample_index in range(sample_count)
     )
     manifest["status"] = "complete" if complete_fidelity and complete_consistency else "evaluation_partial"
     return save_experiment_manifest(manifest)
+
+
+def _entry_at(entries: list[Any], sample_index: int) -> dict[str, Any] | None:
+    return entries[sample_index] if sample_index < len(entries) else None
+
+
+def _set_entry(entries: list[Any], sample_index: int, value: dict[str, Any]) -> None:
+    while len(entries) <= sample_index:
+        entries.append(None)
+    entries[sample_index] = value
+
+
+def _is_scored(entry: dict[str, Any] | None) -> bool:
+    return bool(entry) and "A" in entry and "B" in entry
 
 
 def _serialize_score(candidate: Any) -> dict[str, Any]:
@@ -245,7 +297,9 @@ def _serialize_score(candidate: Any) -> dict[str, Any]:
     return {"dimensions": dimensions, "overall": overall}
 
 
-def _blind_mapping(seed: str) -> dict[str, str]:
+def blind_mapping(seed: str) -> dict[str, str]:
+    """把两臂确定性地打乱成候选 X/Y。同一 seed 永远得到同一映射，实验因此可复现；
+    LLM 盲评与人工盲评使用不同 seed 命名空间，两者的映射互相独立。"""
     arms = ["A", "B"]
     random.Random(seed).shuffle(arms)
     return {"X": arms[0], "Y": arms[1]}
@@ -265,8 +319,12 @@ def _read_generated_image(
     manifest: dict[str, Any],
     market: str,
     arm: str,
+    sample_index: int,
 ) -> dict[str, Any]:
-    metadata = manifest["images"][market][arm]
+    samples = manifest["images"][market][arm]
+    metadata = samples[sample_index] if sample_index < len(samples) else None
+    if not metadata:
+        raise ValueError(f"缺少 {market} / Arm {arm} 第 {sample_index + 1} 张生成图。")
     return {
         "data": (experiment_dir / metadata["relative_path"]).read_bytes(),
         "mime_type": metadata["mime_type"],

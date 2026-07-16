@@ -187,15 +187,18 @@ def run_ab_images(
     (experiment_dir / "generated").mkdir(exist_ok=True)
     (experiment_dir / "references").mkdir(exist_ok=True)
 
-    manifest = _load_json(manifest_path) or _new_manifest(
-        experiment_id=experiment_id,
-        fingerprint=fingerprint,
-        spec=spec,
-        selected_markets=selected_markets,
-        source_images=source_images,
-        primary_reference_index=primary_reference_index,
-        generation_settings=generation_settings,
-        prompt_pairs=prompt_pairs,
+    manifest = migrate_legacy_single_sample(
+        _load_json(manifest_path)
+        or _new_manifest(
+            experiment_id=experiment_id,
+            fingerprint=fingerprint,
+            spec=spec,
+            selected_markets=selected_markets,
+            source_images=source_images,
+            primary_reference_index=primary_reference_index,
+            generation_settings=generation_settings,
+            prompt_pairs=prompt_pairs,
+        )
     )
     _persist_reference_images(experiment_dir, source_images, manifest)
     manifest["generation_errors"] = []
@@ -203,14 +206,28 @@ def run_ab_images(
     _write_manifest(manifest_path, manifest)
 
     generator = generator or OpenAIImageGenerator()
-    tasks = [(market, arm) for market in selected_markets for arm in ("A", "B")]
+    sample_count = generation_settings.samples_per_arm
+    tasks = [
+        (market, arm, sample_index)
+        for market in selected_markets
+        for arm in ("A", "B")
+        for sample_index in range(sample_count)
+    ]
     random.Random(fingerprint).shuffle(tasks)
-    manifest["generation_order"] = [f"{market}:{arm}" for market, arm in tasks]
+    manifest["generation_order"] = [
+        f"{market}:{arm}:{sample_index + 1}" for market, arm, sample_index in tasks
+    ]
 
-    for market, arm in tasks:
-        existing = manifest.get("images", {}).get(market, {}).get(arm)
+    for market, arm, sample_index in tasks:
+        existing = _stored_image(manifest, market, arm, sample_index)
         if existing and (experiment_dir / existing["relative_path"]).exists():
-            logger.info("A/B image cache hit experiment=%s market=%s arm=%s", experiment_id, market, arm)
+            logger.info(
+                "A/B image cache hit experiment=%s market=%s arm=%s sample=%s",
+                experiment_id,
+                market,
+                arm,
+                sample_index + 1,
+            )
             continue
 
         prompt = prompt_pairs[market][arm]
@@ -220,34 +237,53 @@ def run_ab_images(
                 prompt,
                 generation_settings,
             )
-            relative_path = Path("generated") / f"{market}_arm_{arm}.png"
+            relative_path = Path("generated") / f"{market}_arm_{arm}_{sample_index + 1}.png"
             output_path = experiment_dir / relative_path
             output_path.write_bytes(image_bytes)
-            manifest.setdefault("images", {}).setdefault(market, {})[arm] = {
-                "relative_path": relative_path.as_posix(),
-                "mime_type": mime_type,
-                "sha256": _sha256(image_bytes),
-                "size_bytes": len(image_bytes),
-                "attempts": attempts,
-            }
+            _store_image(
+                manifest,
+                market,
+                arm,
+                sample_index,
+                {
+                    "relative_path": relative_path.as_posix(),
+                    "mime_type": mime_type,
+                    "sha256": _sha256(image_bytes),
+                    "size_bytes": len(image_bytes),
+                    "attempts": attempts,
+                },
+            )
             logger.info(
-                "A/B image parsed experiment=%s market=%s arm=%s bytes=%s sha256=%s",
+                "A/B image parsed experiment=%s market=%s arm=%s sample=%s bytes=%s sha256=%s",
                 experiment_id,
                 market,
                 arm,
+                sample_index + 1,
                 len(image_bytes),
                 _sha256(image_bytes),
             )
         except Exception as exc:
-            logger.exception("A/B image failed experiment=%s market=%s arm=%s", experiment_id, market, arm)
+            logger.exception(
+                "A/B image failed experiment=%s market=%s arm=%s sample=%s",
+                experiment_id,
+                market,
+                arm,
+                sample_index + 1,
+            )
             manifest["generation_errors"].append(
-                {"market": market, "arm": arm, "error": str(exc)}
+                {"market": market, "arm": arm, "sample": sample_index + 1, "error": str(exc)}
             )
         manifest["updated_at"] = _utc_now()
         _write_manifest(manifest_path, manifest)
 
-    expected_count = len(selected_markets) * 2
-    actual_count = sum(len(arms) for arms in manifest.get("images", {}).values())
+    expected_count = len(selected_markets) * 2 * sample_count
+    actual_count = sum(
+        1
+        for arms in manifest.get("images", {}).values()
+        for samples in arms.values()
+        for item in samples
+        if item
+    )
     manifest["status"] = "generated" if actual_count == expected_count else "generation_partial"
     manifest["updated_at"] = _utc_now()
     _write_manifest(manifest_path, manifest)
@@ -258,6 +294,72 @@ def get_experiment_dir(manifest: dict[str, Any]) -> Path:
     return ARTIFACTS_ROOT / manifest["experiment_id"]
 
 
+def samples_per_arm(manifest: dict[str, Any]) -> int:
+    return int(manifest.get("generation_settings", {}).get("samples_per_arm", 1))
+
+
+def migrate_legacy_single_sample(manifest: dict[str, Any]) -> dict[str, Any]:
+    """把 samples_per_arm=1 时代的单图结构迁移成多样本列表结构。
+
+    旧格式：manifest["images"][market][arm] = {relative_path, ...}
+    新格式：manifest["images"][market][arm] = [{relative_path, ...}, ...]
+    评分同理：evaluations["fidelity"][market] 与 evaluations["consistency"] 由
+    单个 dict 变成按样本下标排列的 list。
+
+    磁盘上的旧文件名（{market}_arm_{arm}.png，无样本后缀）不做改名——路径一律从
+    metadata 里的 relative_path 读，因此旧实验能原样读回，不必重新花钱生成。
+    """
+    images = manifest.get("images")
+    if isinstance(images, dict):
+        for arms in images.values():
+            if not isinstance(arms, dict):
+                continue
+            for arm, value in arms.items():
+                if isinstance(value, dict):
+                    arms[arm] = [value]
+
+    evaluations = manifest.get("evaluations")
+    if isinstance(evaluations, dict):
+        fidelity = evaluations.get("fidelity")
+        if isinstance(fidelity, dict):
+            for market, value in fidelity.items():
+                if isinstance(value, dict):
+                    fidelity[market] = [value]
+        consistency = evaluations.get("consistency")
+        if isinstance(consistency, dict):
+            evaluations["consistency"] = [consistency] if consistency else []
+
+    manual = manifest.get("manual_scores")
+    if isinstance(manual, dict) and "raters" not in manual:
+        if manual.get("fidelity") or manual.get("consistency"):
+            legacy_fidelity = {
+                market: value if isinstance(value, list) else [value]
+                for market, value in (manual.get("fidelity") or {}).items()
+            }
+            legacy_consistency = manual.get("consistency")
+            manifest["manual_scores"] = {
+                "raters": {
+                    "rater_1": {
+                        "fidelity": legacy_fidelity,
+                        "consistency": (
+                            [legacy_consistency]
+                            if isinstance(legacy_consistency, dict) and legacy_consistency
+                            else (legacy_consistency or [])
+                        ),
+                        "completed": bool(manual.get("completed")),
+                        # 旧版评分界面直接显示「Arm A / Arm B」列名，评分者打分前就知道
+                        # 哪张来自哪个实验臂——那不是盲评。迁移时如实标注，避免历史数据
+                        # 被当成盲评数据引用。
+                        "blind": False,
+                    }
+                }
+            }
+        else:
+            manifest["manual_scores"] = {"raters": {}}
+
+    return manifest
+
+
 def load_experiment_by_id(experiment_id: str) -> dict[str, Any]:
     """从磁盘按实验 ID 直接读回 manifest，用于跨 session 恢复已跑好的实验（避免因 Spec
     重新生成导致指纹不匹配、被迫重新花钱生成图片）。"""
@@ -265,7 +367,7 @@ def load_experiment_by_id(experiment_id: str) -> dict[str, Any]:
     manifest_path = ARTIFACTS_ROOT / experiment_id / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"未找到实验 {experiment_id}（路径不存在：{manifest_path}）")
-    return _load_json(manifest_path)  # type: ignore[return-value]
+    return migrate_legacy_single_sample(_load_json(manifest_path))  # type: ignore[arg-type]
 
 
 def list_experiment_ids() -> list[str]:
@@ -277,8 +379,17 @@ def list_experiment_ids() -> list[str]:
     )
 
 
-def save_manual_scores(manifest: dict[str, Any], manual_scores: dict[str, Any]) -> dict[str, Any]:
-    manifest["manual_scores"] = manual_scores
+def save_manual_scores(
+    manifest: dict[str, Any],
+    rater_id: str,
+    manual_scores: dict[str, Any],
+) -> dict[str, Any]:
+    """按评分者分别落盘，多名评审各自独立打分不会互相覆盖（B3 需要评分者一致性）。"""
+    rater_id = rater_id.strip()
+    if not rater_id:
+        raise ValueError("必须填写评分者标识，否则多人评分无法区分。")
+    raters = manifest.setdefault("manual_scores", {}).setdefault("raters", {})
+    raters[rater_id] = {**manual_scores, "saved_at": _utc_now()}
     manifest["updated_at"] = _utc_now()
     _write_manifest(get_experiment_dir(manifest) / "manifest.json", manifest)
     return manifest
@@ -387,6 +498,31 @@ def _generate_with_retries(
             if attempt < max_attempts:
                 time.sleep(min(2 ** (attempt - 1), 6))
     raise RuntimeError("；".join(errors))
+
+
+def _stored_image(
+    manifest: dict[str, Any],
+    market: str,
+    arm: str,
+    sample_index: int,
+) -> dict[str, Any] | None:
+    samples = manifest.get("images", {}).get(market, {}).get(arm) or []
+    return samples[sample_index] if sample_index < len(samples) else None
+
+
+def _store_image(
+    manifest: dict[str, Any],
+    market: str,
+    arm: str,
+    sample_index: int,
+    metadata: dict[str, Any],
+) -> None:
+    samples = manifest.setdefault("images", {}).setdefault(market, {}).setdefault(arm, [])
+    # 生成顺序被指纹打乱，失败项会留下空位，所以按下标补齐而不是 append，
+    # 否则重跑补跑时样本下标会跟第一次跑的对不上。
+    while len(samples) <= sample_index:
+        samples.append(None)
+    samples[sample_index] = metadata
 
 
 def _write_manifest(path: Path, manifest: dict[str, Any]) -> None:
