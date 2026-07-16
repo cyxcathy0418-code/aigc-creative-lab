@@ -20,7 +20,7 @@ from src.schemas import BlindJudgeResponse
 
 
 logger = logging.getLogger("creative_lab.ab_eval")
-DIMENSION_KEYS = ("color", "logo", "material", "silhouette", "distinctive_details")
+DIMENSION_KEYS = ("color", "brand_marking", "material", "silhouette", "distinctive_details")
 
 
 @dataclass
@@ -288,7 +288,7 @@ def _fidelity_prompt() -> str:
     return """你是严格的电商商品视觉一致性评估员。以下先给真实商品参考图，再给两个随机编号候选图。
 你不知道候选图来自哪种方法，也不得推测。不要评价广告创意、背景、人物、文案、美感或市场适配，只比较商品本体。
 分别为 Candidate X 和 Candidate Y 的五个维度打 0-5 分并给出可观察的简短理由：
-color 颜色；logo 标识文字/图形及位置；material 材质与表面质感；silhouette 轮廓和比例；distinctive_details 独特部件。
+color 颜色；brand_marking 品牌标识的类型、文字或图形内容、位置及呈现工艺；material 材质与表面质感；silhouette 轮廓和比例；distinctive_details 独特部件。
 看不清的维度应保守评分并说明，不要编造。严格按 JSON Schema 输出。"""
 
 
@@ -296,7 +296,7 @@ def _consistency_prompt() -> str:
     return """你是严格的跨广告版本商品身份一致性评估员。下面有 Group X 和 Group Y，每组包含同一商品在不同市场的多张广告图。
 你不知道两组来自哪种方法，也不得推测。市场背景、人物、语言、构图和广告风格本来就应不同，必须忽略这些差异，只比较组内商品本体是否稳定。
 分别为 Group X 和 Group Y 的五个维度打 0-5 分并给出可观察的简短理由：
-color 颜色；logo 标识文字/图形及位置；material 材质与表面质感；silhouette 轮廓和比例；distinctive_details 独特部件。
+color 颜色；brand_marking 品牌标识的类型、文字或图形内容、位置及呈现工艺；material 材质与表面质感；silhouette 轮廓和比例；distinctive_details 独特部件。
 看不清的维度应保守评分并说明，不要编造。输出 candidate_id 时仍使用 X/Y，严格按 JSON Schema 输出。"""
 
 

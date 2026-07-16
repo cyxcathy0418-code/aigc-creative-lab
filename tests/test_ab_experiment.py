@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 from src.ab_eval import BaseABJudge, JudgeCallResult
 from src.ab_experiment import BaseImageGenerator, build_control_prompt, build_experiment_zip, find_anchor_leaks
+from src.prompts import build_anchor_block
 from src.graph import build_ab_experiment_graph
 from src.schemas import (
     ABGenerationSettings,
@@ -74,7 +75,15 @@ def _spec() -> ProductSpec:
                 "secondary_colors": [{"name": "银色", "hex": "#CCCCCC"}],
                 "material": "磨砂不锈钢",
                 "silhouette": "高瘦直筒",
-                "logo": {"text": "KIVRA", "position": "正面中部", "style": "白色细体字"},
+                "brand_marking": {
+                    "mark_type": "wordmark",
+                    "text_content": "KIVRA",
+                    "graphic_description": "无",
+                    "position": "正面中部",
+                    "application_method": "丝印",
+                    "appearance": "白色细体字、低对比",
+                    "preservation_level": "required",
+                },
                 "distinctive_details": ["黑色提手"],
                 "proportions": "高瘦",
             },
@@ -117,6 +126,25 @@ def _creative(market: str) -> dict:
 
 
 class ABExperimentTests(unittest.TestCase):
+    def test_legacy_logo_is_migrated_to_brand_marking(self) -> None:
+        spec_data = _spec().model_dump()
+        visual = spec_data["visual_anchor"]
+        visual.pop("brand_marking")
+        visual["logo"] = {"text": "KIVRA", "position": "正面中部", "style": "白色细体字"}
+
+        migrated = ProductSpec.model_validate(spec_data)
+
+        self.assertEqual(migrated.visual_anchor.brand_marking.mark_type, "wordmark")
+        self.assertEqual(migrated.visual_anchor.brand_marking.text_content, "KIVRA")
+        self.assertNotIn("logo", migrated.model_dump()["visual_anchor"])
+
+    def test_brand_marking_is_written_into_anchor_with_required_wordmark_rule(self) -> None:
+        anchor = build_anchor_block(_spec())
+
+        self.assertIn("KIVRA", anchor)
+        self.assertIn("丝印", anchor)
+        self.assertIn("If exact text cannot be rendered", anchor)
+
     def test_control_prompt_has_basic_product_context_without_anchor(self) -> None:
         creative = MarketCreative.model_validate(_creative("美国"))
         prompt = build_control_prompt(_spec(), creative)

@@ -62,7 +62,7 @@ ANCHOR_REFERENCE_FIELDS = [
     "visual_anchor.secondary_colors",
     "visual_anchor.material",
     "visual_anchor.silhouette",
-    "visual_anchor.logo",
+    "visual_anchor.brand_marking",
     "visual_anchor.distinctive_details",
     "visual_anchor.proportions",
     "selling_points",
@@ -86,7 +86,15 @@ SPEC_EXTRACTOR_PROMPT = """你是资深电商视觉分析师，擅长把商品�
     "secondary_colors": [ { "name": "", "hex": "" } ],
     "material": "",
     "silhouette": "",
-    "logo": { "text": "", "position": "", "style": "" },
+    "brand_marking": {
+      "mark_type": "wordmark",
+      "text_content": "",
+      "graphic_description": "",
+      "position": "",
+      "application_method": "",
+      "appearance": "",
+      "preservation_level": "best_effort"
+    },
     "distinctive_details": [],
     "proportions": ""
   },
@@ -104,11 +112,17 @@ SPEC_EXTRACTOR_PROMPT = """你是资深电商视觉分析师，擅长把商品�
    - 品牌调性只提炼品牌人格和长期气质，如专业、年轻、可靠、高级、亲和；不要把具体拍摄风格、构图、色调、滤镜、场景写进 brand_tone。
 2. 图片看不清、信息未提供的字段，填 "未知"，不要猜测。
 3. primary_color / secondary_colors 的 hex 是根据图片估计的近似色值，允许估计但要接近。
-4. logo 分三种情况处理：(a) 图片中无任何 logo → text / position / style 均填 "无"；(b) logo 为文字或含可读文字 → text 如实填写文字内容；(c) logo 为图形/徽标或文字不可读 → text 填 "图形"，并在 style 中描述图形所描绘的具体图案内容（人物/动物/字母/几何形状及其排布），而不仅是外形轮廓。例如应写 "圆形徽标，内含一个正面长发人物头像"，而不是笼统的 "圆形浮雕图形"。
+4. brand_marking 是商品表面可见的品牌标识，不要将其笼统视为 logo：
+   - 无标识：mark_type 填 "none"，其余字段均填 "无"，preservation_level 填 "omit_if_unclear"。
+   - 仅有可读文字品牌名：mark_type 填 "wordmark"，text_content 逐字如实填写，graphic_description 填 "无"。
+   - 仅有图形/徽标：mark_type 填 "graphic_mark"，text_content 填 "无"，graphic_description 必须描述图形所描绘的具体内容（人物/动物/字母/几何形状及排布），不能只写外形轮廓。
+   - 图文组合：mark_type 填 "combined_mark"，同时填写可读文字和图形内容。
+   - 文字不可读：mark_type 填 "unreadable"，text_content 填 "未知"，不要猜测或编造品牌名。
+   - position 填可见位置；application_method 填压印、雕刻、丝印、贴纸、织标等可见工艺，无法判断填 "未知"；appearance 填颜色、对比度、大小与质感等可见表现。默认 preservation_level 填 "best_effort"。
 5. brand_tone 最多输出 5 个简洁关键词（每个不超过 6 字），不要照抄用户提供的长段文案。
 6. selling_points 每条提炼到 20 字以内，按重要性排序，最多 4 条。
 7. visual_taboos 结合品类常识补充（如廉价感、其他品牌元素、夸大功效文字、缺失核心识别部件等），最多 6 条。
-8. anchor_sentence 是最关键的字段：用一句话（60 字以内）浓缩"最能一眼锁定这个商品身份"的视觉特征（颜色+材质+造型+logo+独特部件），要具体、可复现、只含视觉信息，会被拼进每一条生成Prompt。若商品含有手柄、提手、吸管、喷嘴等突出的结构性部件（占据显著画面比例、影响整体轮廓的部件），必须优先纳入 anchor_sentence 和 distinctive_details，不可为了控制字数而省略——结构性部件的优先级高于表面纹理或次要细节。
+8. anchor_sentence 是最关键的字段：用一句话（60 字以内）浓缩"最能一眼锁定这个商品身份"的视觉特征（颜色+材质+造型+品牌标识+独特部件），要具体、可复现、只含视觉信息，会被拼进每一条生成Prompt。若商品含有手柄、提手、吸管、喷嘴等突出的结构性部件（占据显著画面比例、影响整体轮廓的部件），必须优先纳入 anchor_sentence 和 distinctive_details，不可为了控制字数而省略——结构性部件的优先级高于表面纹理或次要细节。
 9. 若商品不同部位材质不同（如杯身、杯盖、手柄、吸管材质不一致），material 字段应分别说明各部位材质，不得用单一材质笼统概括整个商品。
 10. 材质特别说明：视觉模型难以从图片准确判断材质（如磨砂不锈钢常被误判为塑料）。若【已知信息】中用户提供了『材质』，material 字段必须以用户提供的为准；仅当用户未提供时，才根据图片谨慎推断。
 11. 全部用中文，输出合法 JSON，不含任何 JSON 以外的文字。
@@ -165,10 +179,27 @@ def build_anchor_block(spec: ProductSpec) -> str:
     clauses.append(color_clause)
     clauses.append(f"材质为{visual.material}")
     clauses.append(f"整体呈{visual.silhouette}，{visual.proportions}")
-    if visual.logo.text not in ("无", ""):
+    marking = visual.brand_marking
+    if marking.mark_type == "wordmark":
         clauses.append(
-            f"{visual.logo.style}的 logo（{visual.logo.text}）位于{visual.logo.position}"
+            f"{marking.application_method}呈现的文字品牌标识“{marking.text_content}”位于"
+            f"{marking.position}，视觉表现为{marking.appearance}"
         )
+    elif marking.mark_type == "graphic_mark":
+        clauses.append(
+            f"{marking.application_method}呈现的图形品牌标识位于{marking.position}，"
+            f"图案为{marking.graphic_description}，视觉表现为{marking.appearance}"
+        )
+    elif marking.mark_type == "combined_mark":
+        clauses.append(
+            f"{marking.application_method}呈现的图文品牌标识位于{marking.position}，"
+            f"文字为“{marking.text_content}”，图案为{marking.graphic_description}，"
+            f"视觉表现为{marking.appearance}"
+        )
+    elif marking.mark_type == "none":
+        clauses.append("商品表面没有品牌文字、图形徽标或装饰性商标")
+    else:
+        clauses.append(f"{marking.position}存在不可读的品牌标识，外观为{marking.appearance}")
     if visual.distinctive_details:
         clauses.append("并保留" + "、".join(visual.distinctive_details))
     description = "；".join(c for c in clauses if c) + "。"
@@ -180,10 +211,22 @@ def build_anchor_block(spec: ProductSpec) -> str:
     taboos = "、".join(spec.visual_taboos)
     if taboos:
         lines.append(f"Never depict: {taboos}.")
+    if marking.mark_type == "none":
+        marking_instruction = "Do not add any brand name, logo, badge, or trademark to the product."
+    elif marking.mark_type == "wordmark" and marking.preservation_level == "required":
+        marking_instruction = (
+            f'Reproduce the exact wordmark "{marking.text_content}" at the stated position. '
+            "If exact text cannot be rendered, do not replace it with invented text or a graphic."
+        )
+    elif marking.mark_type == "unreadable" or marking.preservation_level == "omit_if_unclear":
+        marking_instruction = "Do not invent readable brand text or substitute an unrelated logo."
+    else:
+        marking_instruction = "Keep the product's brand marking type, content, position, and finish as described above."
     lines.append(
-        "Keep the product's parts, logo, colors and materials exactly as described above; "
+        "Keep the product's parts, colors and materials exactly as described above; "
         "do not add, remove, or replace any of them."
     )
+    lines.append(marking_instruction)
     return "\n".join(lines)
 
 
@@ -251,7 +294,7 @@ def format_derivation_prompt(
 - image_prompt_draft 与 video_prompt_draft 一律用英文，屏显文字和配音可在引号中保留本地语言原文。
 - 卖点只能取自 selling_points；不要把外观特征伪装成产品功能，也不要把“可投放、爆款、高转化”等主观判断写成事实。
 - 遵守该市场的合规边界，并同时遵守 Spec 内 visual_taboos。
-- 风格倾向只决定画面表达，不得改变商品身份、外观、logo、材质、颜色或卖点。
+- 风格倾向只决定画面表达，不得改变商品身份、外观、品牌标识、材质、颜色或卖点。
 - 请输出符合 JSON Schema 的合法 JSON，不要输出任何解释性文字。
 """
     if previous_error:

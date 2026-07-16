@@ -21,7 +21,7 @@ from src.schemas import ABGenerationSettings, MarketCreative, ProductSpec
 
 logger = logging.getLogger("creative_lab.ab_experiment")
 ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts" / "ab_experiments"
-IGNORED_LEAK_VALUES = {"", "无", "未知", "图形"}
+IGNORED_LEAK_VALUES = {"", "无", "未知", "图形", "未知图形内容"}
 
 
 class BaseImageGenerator(ABC):
@@ -72,11 +72,11 @@ def build_control_prompt(spec: ProductSpec, creative: MarketCreative) -> str:
 
 def find_anchor_leaks(prompt: str, spec: ProductSpec) -> list[str]:
     visual = spec.visual_anchor
-    logo_text = visual.logo.text.strip()
-    protected_logo_text = (
+    marking = visual.brand_marking
+    protected_mark_text = (
         []
-        if logo_text.casefold() == spec.product_identity.name.strip().casefold()
-        else [logo_text]
+        if marking.text_content.casefold() == spec.product_identity.name.strip().casefold()
+        else [marking.text_content]
     )
     candidates = [
         visual.primary_color.name,
@@ -85,9 +85,11 @@ def find_anchor_leaks(prompt: str, spec: ProductSpec) -> list[str]:
         *(color.hex for color in visual.secondary_colors),
         visual.material,
         visual.silhouette,
-        *protected_logo_text,
-        visual.logo.position,
-        visual.logo.style,
+        *protected_mark_text,
+        marking.graphic_description,
+        marking.position,
+        marking.application_method,
+        marking.appearance,
         *visual.distinctive_details,
         visual.proportions,
         spec.anchor_sentence,

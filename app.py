@@ -30,7 +30,7 @@ MAX_IMAGE_SIZE_MB = 10
 MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024
 DIMENSION_LABELS = {
     "color": "颜色",
-    "logo": "Logo",
+    "brand_marking": "品牌标识",
     "material": "材质",
     "silhouette": "轮廓比例",
     "distinctive_details": "独特部件",
@@ -853,7 +853,7 @@ def _render_spec_editor(spec_data: dict[str, Any]) -> None:
             use_container_width=True,
         )
     with raw_col:
-        st.caption("建议重点核对：主色、材质、logo、独特结构件、anchor_sentence。")
+        st.caption("建议重点核对：主色、材质、品牌标识、独特结构件、anchor_sentence。")
 
     with st.expander("➕ 增删条目（卖点 / 独特细节 / 视觉禁忌 / 品牌调性）", expanded=True):
         st.caption("调大对应数字，下方就会多出一个空白项，供你补充自己的内容；调小则删除末尾项。")
@@ -931,13 +931,53 @@ def _render_spec_editor(spec_data: dict[str, Any]) -> None:
             edited_visual["material"] = st.text_input("材质与质感", value=visual_anchor["material"], key=_widget_key("material"))
             edited_visual["silhouette"] = st.text_input("版型/轮廓", value=visual_anchor["silhouette"], key=_widget_key("silhouette"))
 
-            logo = visual_anchor["logo"]
-            logo_cols = st.columns(3)
-            edited_visual["logo"] = {
-                "text": logo_cols[0].text_input("Logo 文字", value=logo["text"], key=_widget_key("logo_text")),
-                "position": logo_cols[1].text_input("Logo 位置", value=logo["position"], key=_widget_key("logo_position")),
-                "style": logo_cols[2].text_input("Logo 样式", value=logo["style"], key=_widget_key("logo_style")),
+            marking = visual_anchor["brand_marking"]
+            st.markdown("##### 品牌标识 Brand Marking")
+            marking_type = st.selectbox(
+                "标识类型",
+                options=["none", "wordmark", "graphic_mark", "combined_mark", "unreadable"],
+                index=["none", "wordmark", "graphic_mark", "combined_mark", "unreadable"].index(marking["mark_type"]),
+                format_func={
+                    "none": "无品牌标识",
+                    "wordmark": "文字品牌名",
+                    "graphic_mark": "图形徽标",
+                    "combined_mark": "图文组合标识",
+                    "unreadable": "标识不可读",
+                }.get,
+                key=_widget_key("marking_type"),
+            )
+            marking_cols = st.columns(2)
+            edited_visual["brand_marking"] = {
+                "mark_type": marking_type,
+                "text_content": marking_cols[0].text_input(
+                    "可读文字内容", value=marking["text_content"], key=_widget_key("marking_text")
+                ),
+                "graphic_description": marking_cols[1].text_input(
+                    "图形内容描述", value=marking["graphic_description"], key=_widget_key("marking_graphic")
+                ),
+                "position": marking_cols[0].text_input(
+                    "标识位置", value=marking["position"], key=_widget_key("marking_position")
+                ),
+                "application_method": marking_cols[1].text_input(
+                    "呈现工艺", value=marking["application_method"], key=_widget_key("marking_method")
+                ),
+                "appearance": marking_cols[0].text_input(
+                    "视觉表现", value=marking["appearance"], key=_widget_key("marking_appearance")
+                ),
+                "preservation_level": marking_cols[1].selectbox(
+                    "生成保留级别",
+                    options=["required", "best_effort", "omit_if_unclear"],
+                    index=["required", "best_effort", "omit_if_unclear"].index(marking["preservation_level"]),
+                    format_func={
+                        "required": "必须保留",
+                        "best_effort": "尽力保留",
+                        "omit_if_unclear": "不清晰时省略",
+                    }.get,
+                    key=_widget_key("marking_preservation"),
+                ),
             }
+            if marking_type == "wordmark":
+                st.caption("精确文字为商业硬要求时，建议后续配合真实品牌资产或局部编辑；纯文生图只能尽力复现。")
 
             st.markdown("##### 独特细节")
             details = []
@@ -1479,11 +1519,13 @@ def _render_judge_score_block(title: str, score_group: dict[str, Any]) -> None:
     if not ("A" in score_group and "B" in score_group):
         return
     st.markdown(f"**{title}**")
+    arm_a_dimensions = _brand_marking_score_dimensions(score_group["A"])
+    arm_b_dimensions = _brand_marking_score_dimensions(score_group["B"])
     rows = [
         {
             "维度": DIMENSION_LABELS[key],
-            "Arm A": score_group["A"]["dimensions"][key]["score"],
-            "Arm B": score_group["B"]["dimensions"][key]["score"],
+            "Arm A": arm_a_dimensions[key]["score"],
+            "Arm B": arm_b_dimensions[key]["score"],
         }
         for key in DIMENSION_LABELS
     ]
@@ -1498,9 +1540,16 @@ def _render_judge_score_block(title: str, score_group: dict[str, Any]) -> None:
     with st.expander("查看盲评理由"):
         for key, label in DIMENSION_LABELS.items():
             st.markdown(
-                f"**{label}**  A: {score_group['A']['dimensions'][key]['reason']}  |  "
-                f"B: {score_group['B']['dimensions'][key]['reason']}"
+                f"**{label}**  A: {arm_a_dimensions[key]['reason']}  |  "
+                f"B: {arm_b_dimensions[key]['reason']}"
             )
+
+
+def _brand_marking_score_dimensions(score: dict[str, Any]) -> dict[str, Any]:
+    dimensions = dict(score.get("dimensions", {}))
+    if "brand_marking" not in dimensions and "logo" in dimensions:
+        dimensions["brand_marking"] = dimensions.pop("logo")
+    return dimensions
 
 
 def _render_manual_scoring(manifest: dict[str, Any]) -> None:
@@ -1560,11 +1609,13 @@ def _render_manual_scoring(manifest: dict[str, Any]) -> None:
 
 def _manual_rows(existing: dict[str, Any]) -> list[dict[str, Any]]:
     # 默认留空（None）而非预填分数，避免用户不打分直接保存产生虚假的"人工评分"。
+    arm_a_dimensions = _brand_marking_score_dimensions(existing.get("A", {}))
+    arm_b_dimensions = _brand_marking_score_dimensions(existing.get("B", {}))
     return [
         {
             "维度": label,
-            "Arm A": existing.get("A", {}).get("dimensions", {}).get(key),
-            "Arm B": existing.get("B", {}).get("dimensions", {}).get(key),
+            "Arm A": arm_a_dimensions.get(key),
+            "Arm B": arm_b_dimensions.get(key),
         }
         for key, label in DIMENSION_LABELS.items()
     ]
