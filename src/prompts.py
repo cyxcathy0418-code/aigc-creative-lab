@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from src.schemas import Brief, DerivationContext, ProductSpec
 
@@ -230,6 +231,30 @@ def build_anchor_block(spec: ProductSpec) -> str:
     return "\n".join(lines)
 
 
+def build_creative_safe_spec_view(spec: ProductSpec) -> dict[str, Any]:
+    """构造派生模型可见的「净室」Spec 视图，只保留非视觉字段。
+
+    A/B 两臂共用同一段 creative_direction（见 derivation_retry._build_prompt_artifact），
+    Arm B 只是在它前面多拼一个 anchor_block。因此只要 direction 的作者看过 visual_anchor，
+    对照组就可能夹带视觉信息，「有无锚点」这个唯一变量就不干净了。
+
+    这里从输入构造上切断该路径：派生模型看不到任何视觉身份字段，商品外观只经由
+    build_anchor_block 进入 Arm B。对照组的纯净性因此来自结构，而不是事后靠
+    find_anchor_leaks 做字符串匹配去拦——后者只拦得住原文相同的词，拦不住英文改写与语义泄漏。
+
+    one_line 一并排除：它虽然只描述外观与品类，但含轮廓信息（如「高挑直筒形」），
+    与 visual_anchor.silhouette 同源。
+    """
+    return {
+        "product_identity": {
+            "name": spec.product_identity.name,
+            "category": spec.product_identity.category,
+        },
+        "selling_points": [point.model_dump() for point in spec.selling_points],
+        "brand_tone": list(spec.brand_tone),
+    }
+
+
 def format_derivation_prompt(
     spec: ProductSpec,
     context: DerivationContext,
@@ -253,13 +278,21 @@ def format_derivation_prompt(
         f"按“{context.style_preference}”风格表达：据此确定色调、光线、场景氛围与镜头语言。",
     )
     markets_literal = "、".join(f"「{market}」" for market in context.target_markets)
-    spec_json = json.dumps(spec.model_dump(), ensure_ascii=False, indent=2)
+    safe_spec_json = json.dumps(
+        build_creative_safe_spec_view(spec), ensure_ascii=False, indent=2
+    )
 
-    prompt = f"""你是资深海外效果广告创意策略师。基于已确认的商品 Spec，为每个选中市场生成一套 15 秒短视频广告创意。
+    prompt = f"""你是资深海外效果广告创意策略师。基于已确认的商品信息，为每个选中市场生成一套 15 秒短视频广告创意。
 
 【唯一数据源】
-下面的 Spec 已经由用户确认。商品的外观、卖点、品牌调性、视觉禁忌都只能来自这里；不要补充 Spec 中不存在的功能、认证、价格、折扣、人物或场景事实。
-{spec_json}
+下面的信息已经由用户确认。卖点与品牌调性只能来自这里；不要补充这里不存在的功能、认证、价格、折扣、人物或场景事实。
+{safe_spec_json}
+
+【商品外观：不在你的职责范围内（最高优先级，违反必须重写）】
+上面的信息**刻意不包含商品外观**（颜色、材质、造型、比例、品牌标识、独特细节）。商品在画面里长什么样，由系统在你输出之后自动拼接的固定锚点决定，不归你负责。
+- 你没有看过商品图，也没有拿到任何外观描述。禁止猜测、编造或暗示商品的颜色、材质、形状、尺寸、表面细节、logo 文字或图案——写错了会直接污染成片。
+- image_prompt_draft / video_prompt_draft / 分镜 visual 里，商品一律用中性指代（the product），只写场景、人物、动作、光线、构图、镜头运动与氛围。
+- Hook / 正文 / CTA / 屏显文案 / 配音同样不得描写商品外观，只从卖点与品牌调性切入。
 
 【本次派生上下文】
 - 平台：{context.platform}
@@ -275,7 +308,7 @@ def format_derivation_prompt(
 - 每个市场的【第 1 镜】必须直接发生在该市场“场景与选角”所描述的具体场景中。例如：东南亚必须是家庭/多人/炎热气候下的出行（摩托通勤、市集、户外）等生活化场景；日本必须是狭小整洁的居家/通勤/桌面场景；韩国必须是潮流咖啡馆/街头/社交分享场景；欧洲必须是极简住宅/安静日常。
 - 【严禁通用模板】：除非市场场景本就如此（仅美国），否则禁止使用“年轻人在健身房/独自在都市跑步/健身长凳上的水杯”这类通用运动生活方式画面。若你发现多个市场都写成了跑步/健身，说明没有做本地化，必须重写。
 - 每个市场的首镜 Hook 和主推卖点要贴合该市场“卖点切入”，不同市场从不同卖点切入（如东南亚主打耐用/性价比/炎热保冷，日本主打精致小巧，韩国主打设计即时尚），不要都按 selling_points 原顺序平铺。
-- 【风格必须落地，且优先级高于场景默认色彩】：image_prompt_draft / video_prompt_draft 里必须显式包含“风格的具体视觉含义”中的关键词（色调、光线、材质、场景氛围）。风格指令与市场场景的默认色彩冲突时，风格指令优先——例如“简约高级”要求低饱和/克制配色，即使该市场场景本身色彩丰富（如热闹市集），也必须表现为压低饱和度、简化背景、克制光线，不得输出 vivid colors / warm sunlight 这类与“低饱和克制”矛盾的词；“科技未来”必须出现 cool tones / neon / metallic / futuristic cityscape 等词，绝不能输出 warm sunlight 的通用画面；“清新治愈”必须是柔光低对比。风格不同，画面必须肉眼可区分。
+- 【风格必须落地，且优先级高于场景默认色彩】：image_prompt_draft / video_prompt_draft 里必须显式包含“风格的具体视觉含义”中的关键词（色调、光线、场景质感、氛围）——这些词只描述场景与打光，不得转用于描写商品本身的材质或颜色。风格指令与市场场景的默认色彩冲突时，风格指令优先——例如“简约高级”要求低饱和/克制配色，即使该市场场景本身色彩丰富（如热闹市集），也必须表现为压低饱和度、简化背景、克制光线，不得输出 vivid colors / warm sunlight 这类与“低饱和克制”矛盾的词；“科技未来”必须出现 cool tones / neon / metallic / futuristic cityscape 等词，绝不能输出 warm sunlight 的通用画面；“清新治愈”必须是柔光低对比。风格不同，画面必须肉眼可区分。
 - 自检：把不同市场的第 1 镜并排看，场景与人物应一眼不同；把不同风格的 image_prompt 并排看，色调氛围应一眼不同；尤其检查风格关键词有没有被场景默认色彩盖过。若雷同或矛盾，重写。
 
 【任务】
@@ -293,8 +326,8 @@ def format_derivation_prompt(
 - Hook / body_copy / CTA / on_screen_copy / voiceover 必须使用该市场指定语言，不得出现翻译腔；对应的 _zh 字段写中文释义。
 - image_prompt_draft 与 video_prompt_draft 一律用英文，屏显文字和配音可在引号中保留本地语言原文。
 - 卖点只能取自 selling_points；不要把外观特征伪装成产品功能，也不要把“可投放、爆款、高转化”等主观判断写成事实。
-- 遵守该市场的合规边界，并同时遵守 Spec 内 visual_taboos。
-- 风格倾向只决定画面表达，不得改变商品身份、外观、品牌标识、材质、颜色或卖点。
+- 遵守该市场的合规边界。
+- 风格倾向只决定画面表达（色调、光线、氛围、镜头语言），不得用来描写商品本身。
 - 请输出符合 JSON Schema 的合法 JSON，不要输出任何解释性文字。
 """
     if previous_error:

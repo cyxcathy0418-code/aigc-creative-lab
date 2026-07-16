@@ -10,12 +10,14 @@ from streamlit.testing.v1 import AppTest
 
 from src.ab_eval import BaseABJudge, JudgeCallResult
 from src.ab_experiment import BaseImageGenerator, build_control_prompt, build_experiment_zip, find_anchor_leaks
-from src.prompts import build_anchor_block
+from src.derivation_retry import _build_prompt_artifact
+from src.prompts import build_anchor_block, build_creative_safe_spec_view, format_derivation_prompt
 from src.graph import build_ab_experiment_graph
 from src.schemas import (
     ABGenerationSettings,
     BlindCandidateScore,
     BlindJudgeResponse,
+    DerivationContext,
     JudgeDimension,
     MarketCreative,
     ProductIdentityScores,
@@ -144,6 +146,41 @@ class ABExperimentTests(unittest.TestCase):
         self.assertIn("KIVRA", anchor)
         self.assertIn("丝印", anchor)
         self.assertIn("If exact text cannot be rendered", anchor)
+
+    def test_derivation_prompt_is_clean_room_and_hides_visual_anchor(self) -> None:
+        spec = _spec()
+        context = DerivationContext(
+            target_markets=["美国", "韩国"],
+            platform="TikTok",
+            style_preference="简约高级",
+        )
+
+        prompt = format_derivation_prompt(spec, context)
+
+        # 净室边界：派生模型看不到任何视觉身份字段，两臂共用的 creative_direction
+        # 因此不可能夹带视觉信息。
+        self.assertEqual(find_anchor_leaks(prompt, spec), [])
+        self.assertNotIn("磨砂不锈钢", prompt)
+        self.assertNotIn("一只保温杯", prompt)  # one_line 含轮廓信息，一并排除
+        # 非视觉字段仍然可见，否则派生无从下手。
+        self.assertIn("保温杯", prompt)
+        self.assertIn("长效保温", prompt)
+        self.assertIn("专业", prompt)
+
+    def test_creative_safe_view_keeps_only_non_visual_fields(self) -> None:
+        view = build_creative_safe_spec_view(_spec())
+
+        self.assertEqual(set(view), {"product_identity", "selling_points", "brand_tone"})
+        self.assertEqual(set(view["product_identity"]), {"name", "category"})
+
+    def test_both_arms_share_the_same_creative_direction(self) -> None:
+        # A/B 的唯一变量必须是 anchor_block 的有无。若哪天让对照组用另一段
+        # 独立生成的 direction，变量就从 1 个变成 2 个——这个断言是防线。
+        artifact = _build_prompt_artifact("[ANCHOR]", "Sunrise rooftop, handheld camera")
+
+        self.assertEqual(artifact.prompt, f"[ANCHOR]\n\n{artifact.bare_prompt}")
+        self.assertIn("Sunrise rooftop, handheld camera", artifact.bare_prompt)
+        self.assertNotIn("[ANCHOR]", artifact.bare_prompt)
 
     def test_control_prompt_has_basic_product_context_without_anchor(self) -> None:
         creative = MarketCreative.model_validate(_creative("美国"))
