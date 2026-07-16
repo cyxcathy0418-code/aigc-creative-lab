@@ -124,12 +124,25 @@ class ColorSpec(StrictBaseModel):
         return cleaned.upper()
 
 
-class LogoSpec(StrictBaseModel):
-    text: str
-    position: str
-    style: str
+class BrandMarkingSpec(StrictBaseModel):
+    """The visible brand treatment on the product, not just a generic logo."""
 
-    @field_validator("*", mode="before")
+    mark_type: Literal["none", "wordmark", "graphic_mark", "combined_mark", "unreadable"]
+    text_content: str
+    graphic_description: str
+    position: str
+    application_method: str
+    appearance: str
+    preservation_level: Literal["required", "best_effort", "omit_if_unclear"]
+
+    @field_validator(
+        "text_content",
+        "graphic_description",
+        "position",
+        "application_method",
+        "appearance",
+        mode="before",
+    )
     @classmethod
     def validate_text(cls, value: Any) -> str:
         cleaned = _clean_text(value)
@@ -137,13 +150,43 @@ class LogoSpec(StrictBaseModel):
             raise ValueError("不能为空")
         return cleaned
 
+    @model_validator(mode="after")
+    def validate_marking_fields(self) -> "BrandMarkingSpec":
+        if self.mark_type == "none":
+            fields = (
+                self.text_content,
+                self.graphic_description,
+                self.position,
+                self.application_method,
+                self.appearance,
+            )
+            if any(value != "无" for value in fields):
+                raise ValueError("mark_type 为 none 时，其余品牌标识字段均需填“无”")
+        elif self.mark_type == "wordmark":
+            if self.text_content in {"无", UNKNOWN}:
+                raise ValueError("文字品牌标识必须填写图片中可读的文字")
+            if self.graphic_description != "无":
+                raise ValueError("文字品牌标识的 graphic_description 应填“无”")
+        elif self.mark_type == "graphic_mark":
+            if self.text_content != "无":
+                raise ValueError("图形标识的 text_content 应填“无”")
+            if self.graphic_description in {"无", UNKNOWN}:
+                raise ValueError("图形标识必须描述具体图案内容")
+        elif self.mark_type == "combined_mark":
+            if self.text_content in {"无", UNKNOWN} or self.graphic_description in {"无", UNKNOWN}:
+                raise ValueError("图文组合标识必须同时填写可读文字和图形描述")
+        elif self.mark_type == "unreadable":
+            if self.text_content != UNKNOWN:
+                raise ValueError("不可读标识的 text_content 必须填“未知”")
+        return self
+
 
 class VisualAnchor(StrictBaseModel):
     primary_color: ColorSpec
     secondary_colors: list[ColorSpec] = Field(max_length=6)
     material: str
     silhouette: str
-    logo: LogoSpec
+    brand_marking: BrandMarkingSpec
     distinctive_details: list[str] = Field(max_length=8)
     proportions: str
 
@@ -161,6 +204,53 @@ class VisualAnchor(StrictBaseModel):
         if not isinstance(value, list):
             raise ValueError("必须是列表")
         return [_clean_text(item) for item in value if _clean_text(item)]
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_logo(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "brand_marking" in value:
+            return value
+        legacy_logo = value.get("logo")
+        if not isinstance(legacy_logo, dict):
+            return value
+
+        text = _clean_text(legacy_logo.get("text")) or UNKNOWN
+        position = _clean_text(legacy_logo.get("position")) or UNKNOWN
+        style = _clean_text(legacy_logo.get("style")) or UNKNOWN
+        if text == "无":
+            marking = {
+                "mark_type": "none",
+                "text_content": "无",
+                "graphic_description": "无",
+                "position": "无",
+                "application_method": "无",
+                "appearance": "无",
+                "preservation_level": "omit_if_unclear",
+            }
+        elif text == "图形":
+            marking = {
+                "mark_type": "graphic_mark",
+                "text_content": "无",
+                "graphic_description": style if style != UNKNOWN else "未知图形内容",
+                "position": position,
+                "application_method": "未知",
+                "appearance": "未知",
+                "preservation_level": "best_effort",
+            }
+        else:
+            marking = {
+                "mark_type": "wordmark",
+                "text_content": text,
+                "graphic_description": "无",
+                "position": position,
+                "application_method": "未知",
+                "appearance": style,
+                "preservation_level": "best_effort",
+            }
+        migrated = dict(value)
+        migrated.pop("logo", None)
+        migrated["brand_marking"] = marking
+        return migrated
 
 
 class SellingPoint(StrictBaseModel):
@@ -395,10 +485,19 @@ class JudgeDimension(StrictBaseModel):
 
 class ProductIdentityScores(StrictBaseModel):
     color: JudgeDimension
-    logo: JudgeDimension
+    brand_marking: JudgeDimension
     material: JudgeDimension
     silhouette: JudgeDimension
     distinctive_details: JudgeDimension
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_logo_score(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "brand_marking" not in value and "logo" in value:
+            migrated = dict(value)
+            migrated["brand_marking"] = migrated.pop("logo")
+            return migrated
+        return value
 
 
 class BlindCandidateScore(StrictBaseModel):
