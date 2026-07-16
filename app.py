@@ -611,7 +611,7 @@ def _show_uploaded_previews(uploaded_files: list[Any]) -> None:
     columns = st.columns(min(len(uploaded_files), 3))
     for column, file in zip(columns, uploaded_files):
         with column:
-            st.image(file, caption=file.name, use_container_width=True)
+            st.image(file, caption=file.name, width="stretch")
 
 
 def _render_input_form() -> list[Any]:
@@ -626,7 +626,7 @@ def _render_input_form() -> list[Any]:
     )
     action_left, action_right = st.columns([1, 3])
     with action_left:
-        st.button("填入示例 Brief", use_container_width=True, on_click=_fill_sample_brief)
+        st.button("填入示例 Brief", width="stretch", on_click=_fill_sample_brief)
     with action_right:
         st.caption("先用示例感受信息结构；生成前仍需要上传真实商品图。")
 
@@ -733,7 +733,7 @@ def _render_input_form() -> list[Any]:
                 '<div class="lab-note">核心卖点进入 selling_points；品牌调性进入 brand_tone；风格倾向只为后续广告派生预留。</div>',
                 unsafe_allow_html=True,
             )
-            generate = st.button("生成 Spec", type="primary", use_container_width=True)
+            generate = st.button("生成 Spec", type="primary", width="stretch")
 
     if generate:
         if len(uploaded_files) < 1:
@@ -850,7 +850,7 @@ def _render_spec_editor(spec_data: dict[str, Any]) -> None:
             data=_json_bytes(data),
             file_name="creative_spec.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
         )
     with raw_col:
         st.caption("建议重点核对：主色、材质、品牌标识、独特结构件、anchor_sentence。")
@@ -1038,7 +1038,7 @@ def _render_spec_editor(spec_data: dict[str, Any]) -> None:
                 key=_widget_key("anchor_sentence"),
             )
 
-        confirm = st.form_submit_button("确认 Spec", type="primary", use_container_width=True)
+        confirm = st.form_submit_button("确认 Spec", type="primary", width="stretch")
 
     if confirm:
         try:
@@ -1062,7 +1062,7 @@ def _render_spec_editor(spec_data: dict[str, Any]) -> None:
                 data=_json_bytes(st.session_state["confirmed_spec"]),
                 file_name="confirmed_creative_spec.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
         with preview_col:
             with st.expander("已确认 Spec JSON", expanded=True):
@@ -1129,7 +1129,7 @@ def _render_market_creatives() -> None:
             f"Platform · {defaults.platform}   |   Style · {defaults.style_preference}   |   Source · Confirmed Spec"
         )
     with action_col:
-        generate = st.button("生成广告创意", type="primary", use_container_width=True)
+        generate = st.button("生成广告创意", type="primary", width="stretch")
 
     if generate:
         try:
@@ -1211,7 +1211,7 @@ def _render_market_creative_results(creatives_data: list[dict[str, Any]]) -> Non
             data=_json_bytes({"creatives": creatives_data}),
             file_name="market_creatives.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
         )
     with note_col:
         st.caption("对照原则：Control 由商品名称、品类和裸版市场方向确定性组装；Treatment 仅额外加入固定商品锚点。")
@@ -1247,7 +1247,7 @@ def _render_market_creative_results(creatives_data: list[dict[str, Any]]) -> Non
                 }
                 for shot in creative["storyboard"]
             ]
-            st.dataframe(storyboard_rows, hide_index=True, use_container_width=True)
+            st.dataframe(storyboard_rows, hide_index=True, width="stretch")
 
             image_tab, video_tab = st.tabs(["Image Prompt", "Video Prompt"])
             with image_tab:
@@ -1356,7 +1356,7 @@ def _render_ab_experiment(creatives_data: list[dict[str, Any]]) -> None:
             preview_cols = st.columns(len(source_images))
             for index, (column, image) in enumerate(zip(preview_cols, source_images)):
                 with column:
-                    st.image(image["data"], use_container_width=True)
+                    st.image(image["data"], width="stretch")
                     st.caption(f"{index + 1}. {image['file_name']}")
             primary_reference_index = st.selectbox(
                 "主参考图",
@@ -1409,7 +1409,7 @@ def _render_ab_experiment(creatives_data: list[dict[str, Any]]) -> None:
     run_experiment = st.button(
         "运行 A/B 对照",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=(
             len(selected_markets) < 2
             or not cost_confirmed
@@ -1486,7 +1486,7 @@ def _render_ab_results(manifest: dict[str, Any]) -> None:
                 metadata = manifest.get("images", {}).get(market, {}).get(arm)
                 if metadata:
                     image_path = experiment_dir / Path(metadata["relative_path"])
-                    st.image(str(image_path), use_container_width=True)
+                    st.image(str(image_path), width="stretch")
                 else:
                     st.warning("图片尚未生成。")
                 with st.expander("查看本臂 Prompt"):
@@ -1509,7 +1509,7 @@ def _render_ab_results(manifest: dict[str, Any]) -> None:
             data=build_experiment_zip(manifest),
             file_name=f"ab_experiment_{manifest['experiment_id']}.zip",
             mime="application/zip",
-            use_container_width=True,
+            width="stretch",
         )
     with meta_col:
         st.caption("ZIP 包含真实参考图、两臂生成图、Spec、Prompt、模型参数、盲评与人工评分 manifest。")
@@ -1536,7 +1536,7 @@ def _render_judge_score_block(title: str, score_group: dict[str, Any]) -> None:
             "Arm B": score_group["B"]["overall"],
         }
     )
-    st.dataframe(rows, hide_index=True, use_container_width=True)
+    st.dataframe(rows, hide_index=True, width="stretch")
     with st.expander("查看盲评理由"):
         for key, label in DIMENSION_LABELS.items():
             st.markdown(
@@ -1564,7 +1564,7 @@ def _render_manual_scoring(manifest: dict[str, Any]) -> None:
             edited = st.data_editor(
                 rows,
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 disabled=["维度"],
                 column_config={
                     "Arm A": st.column_config.NumberColumn(min_value=0, max_value=5, step=1),
@@ -1579,7 +1579,7 @@ def _render_manual_scoring(manifest: dict[str, Any]) -> None:
         edited_consistency = st.data_editor(
             consistency_rows,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
             disabled=["维度"],
             column_config={
                 "Arm A": st.column_config.NumberColumn(min_value=0, max_value=5, step=1),
@@ -1594,7 +1594,7 @@ def _render_manual_scoring(manifest: dict[str, Any]) -> None:
     )
     if incomplete:
         st.info("人工评分尚未完成：请把每个市场还原度、以及一致性表里的每一格（Arm A / Arm B）都填上 0-5，才能保存。")
-    if st.button("保存人工评分", use_container_width=True, disabled=incomplete):
+    if st.button("保存人工评分", width="stretch", disabled=incomplete):
         updated = save_manual_scores(
             manifest,
             {

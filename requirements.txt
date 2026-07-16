@@ -1,7 +1,7 @@
-streamlit>=1.36.0
-openai>=1.51.0
-python-dotenv>=1.0.1
-pydantic>=2.7.0
-langgraph>=0.2.0
-langsmith>=0.1.95
-tenacity>=8.2.3
+streamlit==1.59.1
+openai==2.45.0
+python-dotenv==1.2.2
+pydantic==2.13.4
+langgraph==1.2.9
+langsmith==0.10.2
+tenacity==9.1.4
