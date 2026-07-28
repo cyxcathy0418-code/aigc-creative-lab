@@ -69,3 +69,19 @@ before inviting external Beta users. The application always uses
 2. Copy the existing root `OPENAI_API_KEY` into the ignored product `.env.local`.
 3. Set `OPENAI_SPEC_EXTRACTION_ENABLED=true`.
 4. Run one representative 1–3 image extraction and turn the flag off again if no further paid testing is approved.
+
+## Live end-to-end verification (2026-07-29)
+
+Ran the full Phase 1 + Phase 2 chain once against the real OpenAI API (dev-login
+session, one reference image from `artifacts/ab_experiments/cb7a3abb932641f2`):
+
+1. `POST /api/products` — Spec extraction succeeded on attempt 1, including the
+   `brandMarking` conditional branch for `markType=unreadable`.
+2. `POST /api/campaigns` — 2-market creative derivation succeeded on attempt 1.
+3. `POST /api/campaigns/:id/generate` — one `1024x1024`/`low` image generated via
+   `images.edit` with the real reference image; the result visibly carried over
+   the pink glossy tube color, silhouette and silver keyring hardware.
+
+All three `OPENAI_*_ENABLED` flags were reset to `false` afterward. This is the
+first live confirmation that the Phase 1/2 acceptance criteria in the PRD are
+met by the actual deployed code path, not only by the mocked test suite.
