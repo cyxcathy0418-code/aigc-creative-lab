@@ -2001,6 +2001,12 @@ a {
   border-bottom: 1px solid var(--ink);
 }
 
+.asset-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
 .campaign-context-strip {
   display: grid;
   grid-template-columns: 0.8fr 0.6fr 1.6fr;
@@ -2539,6 +2545,16 @@ a {
   font-family: var(--font-mono);
   font-size: 9px;
   font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.asset-download-link {
+  margin-left: 8px;
+  padding: 0;
+  border-bottom: 1px solid currentColor;
+  font-family: var(--font-mono);
+  font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.06em;
 }

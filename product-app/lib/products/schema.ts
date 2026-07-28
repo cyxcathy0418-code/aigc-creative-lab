@@ -8,6 +8,18 @@ export const SUPPORTED_MARKETS = [
   "东南亚",
 ] as const;
 
+// ASCII codes for generated filenames. Supabase Storage's signed-URL
+// `download` option and some ZIP tools mishandle non-ASCII filenames, so
+// downloaded files use these instead of the Chinese market label.
+export const MARKET_FILE_CODES: Record<(typeof SUPPORTED_MARKETS)[number], string> =
+  {
+    美国: "US",
+    欧洲: "EU",
+    日本: "JP",
+    韩国: "KR",
+    东南亚: "SEA",
+  };
+
 export const SUPPORTED_IMAGE_TYPES = [
   "image/jpeg",
   "image/png",

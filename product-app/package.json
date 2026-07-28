@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "npm run build && node --experimental-strip-types --test --test-concurrency=1 tests/product-spec.test.mjs tests/spec-extractor.test.mjs tests/campaign-derivation.test.mjs tests/image-generation.test.mjs tests/phase2-foundation.test.mjs tests/authorization.test.mjs tests/rendered-html.test.mjs",
+    "test": "npm run build && node --experimental-strip-types --test --test-concurrency=1 tests/product-spec.test.mjs tests/spec-extractor.test.mjs tests/campaign-derivation.test.mjs tests/image-generation.test.mjs tests/phase2-foundation.test.mjs tests/authorization.test.mjs tests/zip-archive.test.mjs tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {

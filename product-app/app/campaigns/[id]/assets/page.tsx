@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { addSignedImageUrls } from "@/lib/products/data";
+import { MARKET_FILE_CODES } from "@/lib/products/schema";
 import { isAuthorizedProductUser } from "@/lib/supabase/authorization";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -95,19 +96,28 @@ export default async function CampaignAssetsPage({
       const asset = Array.isArray(assetRelation)
         ? assetRelation[0]
         : assetRelation;
+      const market = creative?.market ?? "未知市场";
+      const marketCode =
+        MARKET_FILE_CODES[market as keyof typeof MARKET_FILE_CODES] ??
+        "asset";
+      const extension = asset?.mime_type === "image/png" ? "png" : "webp";
       const { data } = asset
         ? await supabase.storage
             .from(bucket)
-            .createSignedUrl(asset.object_path, 60 * 60)
+            .createSignedUrl(asset.object_path, 60 * 60, {
+              download: `${marketCode}.${extension}`,
+            })
         : { data: null };
       return {
         ...job,
-        market: creative?.market ?? "未知市场",
+        market,
         asset,
         signedUrl: data?.signedUrl ?? null,
       };
     }),
   );
+  const hasCompletedAssets = preparedJobs.some((job) => job.signedUrl);
+
   return (
     <main className="dashboard-shell">
       <WorkspaceHeader email={user.email} />
@@ -120,9 +130,19 @@ export default async function CampaignAssetsPage({
               {campaign.name}。左侧始终是原始商品参考，右侧是各市场生成结果，方便直接检查商品有没有被画错。
             </p>
           </div>
-          <Link className="text-link" href={`/campaigns/${id}/creatives`}>
-            ← 返回市场创意
-          </Link>
+          <div className="asset-heading-actions">
+            {hasCompletedAssets ? (
+              <a
+                className="button button-dark"
+                href={`/api/campaigns/${id}/assets/download-all`}
+              >
+                打包下载全部
+              </a>
+            ) : null}
+            <Link className="text-link" href={`/campaigns/${id}/creatives`}>
+              ← 返回市场创意
+            </Link>
+          </div>
         </div>
 
         {preparedJobs.length ? (
@@ -173,7 +193,17 @@ export default async function CampaignAssetsPage({
                         <p>{job.error_message ?? "生成任务没有返回图片。"}</p>
                       </div>
                     )}
-                    <figcaption>OUTPUT / {job.market}</figcaption>
+                    <figcaption>
+                      OUTPUT / {job.market}
+                      {job.signedUrl ? (
+                        <a
+                          className="text-link asset-download-link"
+                          href={job.signedUrl}
+                        >
+                          下载
+                        </a>
+                      ) : null}
+                    </figcaption>
                   </figure>
                 </div>
               </article>
