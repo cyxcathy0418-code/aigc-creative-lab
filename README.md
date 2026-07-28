@@ -1,12 +1,20 @@
-# AIGC Creative Lab - Spec + Market Creative + A/B Demo
+# Brand Anchor Studio · AIGC Creative Lab
 
-这个 demo 已实现前三步：
+面向跨境电商 AIGC 广告场景，用**结构化商品视觉锚点**解决文生图广告里商品颜色、轮廓、部件与品牌标识跨版本、跨市场跑偏的问题：先把商品拍照抽取成结构化 Spec，再由代码强制把这个锚点拼进每一条生成 Prompt，而不是依赖模型自己记住商品长什么样。
 
-1. 商品 Brief 输入、上传商品图、多模态 LLM 抽取结构化 Spec、Pydantic 校验、页面可编辑并确认 Spec。
-2. 基于已确认 Spec，按选中市场派生 Hook、CTA、15 秒分镜、图片 Prompt、视频 Prompt，并自动拼接固定商品锚点。
-3. 对相同市场创意运行 Control / Spec Anchor 图像 A/B，并通过盲化多模态 Judge 与人工评分对照商品还原度和跨市场一致性。
+仓库分两部分：
 
-尚未实现 agentic loop、素材库或投放看板。
+- **[`product-app/`](./product-app)** — 面向真实用户的 Web Beta（Next.js 16 + Supabase + OpenAI）：商品上传 → 结构化 Spec 确认编辑 → 多市场创意派生 → 参考图条件图像生成 → 资产下载。当前邀请制内测，已用真实 API 端到端验证过。详见 [product-app/README.md](./product-app/README.md)（含完整功能清单与路线图）。
+- **本目录（Python / Streamlit）** — 锚点机制最早在这里验证：受控 A/B 实验（有锚点 vs 无锚点）+ LLM 盲评 + 双人独立人工盲评，是 `product-app` 那套机制背后的研究工作台。下面的说明都属于这一部分。
+
+## Roadmap
+
+- **邀请真实用户内测**：先跑一版覆盖全部品牌标识类型（无/文字标/图形标/图文组合/模糊不可读）、10-12 个真实商品 × 多市场的离线质量评测，再邀请首批 5-10 位真实跨境卖家试用。
+- **平台差异化生成**：按 TikTok、Amazon/Shopee 商品主图、独立站/Feed 广告、小红书等各自的画幅、节奏与内容规则派生 Prompt，而不是现在统一的自由文本 `platform` 字段。
+- **计费**：验证真实付费意愿后接入 Stripe 信用额度，当前是免费邀请制。
+- **正式部署**：Vercel 部署 `product-app` + 生产环境收尾（自建 SMTP、关闭 Supabase 匿名登录、OpenAI 用量告警）。
+
+---
 
 ## 安装依赖
 
