@@ -2,6 +2,8 @@
 
 The customer-facing application for Brand Anchor Studio. The existing Python/Streamlit application at the repository root remains the internal experimentation lab where the anchor mechanism was first validated (see `../PROJECT_GROUND_TRUTH.md`).
 
+Deploying for the first external invite? See [DEPLOYMENT.md](./DEPLOYMENT.md).
+
 ## What's built (Phase 0–3)
 
 - Public landing page at `/`; invite-only email login at `/login` (plus a
