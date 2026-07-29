@@ -43,12 +43,12 @@ not backfilled after:
   Postgres, but there's no step-by-step trace view.
 - **Billing**: no Stripe/credits. Deliberately deferred until invite-only
   Beta usage validates real demand — see `../HANDOFF.md` for the reasoning.
-- **Production deployment**: not deployed. Before any external invite:
+- **Production deployment**: not deployed yet. Deploying on Vercel (matching
+  the original PRD; unused Cloudflare/wrangler/Drizzle scaffolding that
+  predated this decision has been removed). Before any external invite:
   disable Supabase anonymous sign-in and self-registration, configure a
-  real SMTP provider (current one is dev-only, low quota), add OpenAI usage
-  alerts, and deploy (Vercel, matching the original PRD; some stray
-  Cloudflare/wrangler scaffolding in this tree predates that decision and
-  should be cleaned up rather than treated as a choice already made).
+  real SMTP provider (current one is dev-only, low quota), and add OpenAI
+  usage alerts.
 
 ## Local development
 
