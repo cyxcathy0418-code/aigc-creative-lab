@@ -6,9 +6,13 @@ langgraph==1.2.9
 langsmith==0.10.2
 tenacity==9.1.4
 
-# Pinned transitive deps: an unpinned pandas/pyarrow resolved on CI segfaulted
-# inside streamlit's dataframe rendering (pandas/core/arrays/string_arrow.py).
-# These are the versions verified locally to run the full suite cleanly.
-pandas==3.0.3
+# Pinned transitive deps. Pandas 3.x defaults string columns to its
+# PyArrow-backed dtype, and that codepath (pandas/core/arrays/string_arrow.py)
+# segfaults on Linux specifically inside Streamlit's threaded AppTest runner
+# (reproduced on GitHub Actions ubuntu-latest, not on local Windows). Pinning
+# to the last pandas 2.x line avoids the Arrow-backed string default entirely
+# rather than chasing the native crash; streamlit==1.59.1 declares
+# pandas<4,>=1.4.0 so this is within its supported range.
+pandas==2.3.3
 pyarrow==25.0.0
 numpy==2.5.1
