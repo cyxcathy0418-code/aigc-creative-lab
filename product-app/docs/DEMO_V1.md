@@ -30,7 +30,7 @@
 
 - [x] 共享工作流 Schema、提供器接口、服务端持久化与最小测试。
 - [x] 英文工作台、事实/方向/脚本/历史交互及实际媒体合成。
-- [ ] Next.js入口与独立托管适配、浏览器完整流程检查、修复、部署、代码同步。
+- [x] Next.js入口与独立托管适配、浏览器完整流程检查、修复、部署、代码同步。
 
 ## 当前验证与边界
 
@@ -39,3 +39,11 @@
 本次不验证任何付费供应商。托管数据通过 Sites 的私有访问和用户 ID 隔离；Next.js 本地文件适配器仅用于单进程开发。独立测试 Supabase 项目留待正式登录/模型集成阶段建立，未恢复原暂停项目。
 
 设备视频缓存不等于云端文件同步；浏览器存储满时可能不能恢复缓存视频，应先下载，仍可从后端保存的图与脚本重建。旧 LoginForm 留有一条导航 lint 警告。
+
+## 运行与部署
+
+已部署的第一版（仅创建者可访问）：https://creative-passport-cathy-demo.cyxcathy0418.chatgpt.site 。首次访问使用创建者的 ChatGPT 账号登录。主仓库继续使用 `feature/creative-passport`；正式 Next.js 页面入口是 `/demo`。
+
+在 `product-app` 中先 `npm ci`，再 `npm run demo:build` 和 `npm run demo:dev`，本地地址为 `http://127.0.0.1:4173`。执行 `npm run demo:prepare -- /独立的站点源码目录` 可将同一套组件与服务准备为托管源，避免更改原仓库的 Git remote。站点身份保存在 `demo-host/.openai/hosting.json`，后续部署复用此身份，不重新创建站点。
+
+构建与 64 项自动化检查通过；本地实际视频和素材包已验证。线上云端保存的浏览器验收需完成首次账号登录后继续。旧项目与 Supabase 暂停环境未改动。

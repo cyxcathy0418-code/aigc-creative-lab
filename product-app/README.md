@@ -83,3 +83,7 @@ gates above cover that separately.
 The `feature/creative-passport` branch adds projects, source-backed facts, immutable Spec/creative revisions, normalized market/locale data (including Mexico), and independent Campaign → Ad Group → Ad draft tables. Existing `campaigns` IDs and routes remain creative batches. The current UI can also create a one-market batch. New project/draft workflow screens are not built in this step.
 
 See [CREATIVE_PASSPORT_FOUNDATION.md](./CREATIVE_PASSPORT_FOUNDATION.md) for migration and verification boundaries.
+
+## Creative Passport first demo
+
+Open the [deployed private demo](https://creative-passport-cathy-demo.cyxcathy0418.chatgpt.site) with the creator's ChatGPT account. It uses the same workflow modules as `/demo` in this Next.js app. Directions are labeled templates; video encoding is real and happens in the browser, with no paid model calls. The hosting adapter provides private R2-backed project/version storage; the original Supabase product is preserved. See [demo scope and local commands](./docs/DEMO_V1.md).

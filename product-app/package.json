@@ -12,7 +12,8 @@
     "test": "node scripts/test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "demo:build": "node demo-host/build.mjs",
-    "demo:dev": "node --experimental-strip-types demo-host/dev.mjs"
+    "demo:dev": "node --experimental-strip-types demo-host/dev.mjs",
+    "demo:prepare": "node demo-host/prepare-site.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.3",
