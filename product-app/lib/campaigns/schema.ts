@@ -102,7 +102,7 @@ export const MarketCreativeDraftSchema = z
 
 export const MarketCreativeDraftSetSchema = z
   .object({
-    creatives: z.array(MarketCreativeDraftSchema).min(2).max(5),
+    creatives: z.array(MarketCreativeDraftSchema).min(1).max(6),
   })
   .strict();
 
@@ -112,8 +112,8 @@ export const CampaignCreateSchema = z
     name: z.string().trim().min(1).max(120),
     targetMarkets: z
       .array(z.enum(SUPPORTED_MARKETS))
-      .min(2, "请至少选择两个市场")
-      .max(5)
+      .min(1, "请至少选择一个市场")
+      .max(6)
       .refine(
         (markets) => new Set(markets).size === markets.length,
         "市场不能重复",
@@ -126,7 +126,7 @@ export const CampaignGenerateSchema = z
     marketsToGenerate: z
       .array(z.enum(SUPPORTED_MARKETS))
       .min(1, "请至少选择一个市场")
-      .max(5)
+      .max(6)
       .refine(
         (markets) => new Set(markets).size === markets.length,
         "市场不能重复",

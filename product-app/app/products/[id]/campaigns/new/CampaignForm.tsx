@@ -34,9 +34,9 @@ export function CampaignForm({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
-    if (selectedMarkets.length < 2) {
+    if (selectedMarkets.length < 1) {
       setStatus("error");
-      setMessage("请选择至少两个市场，才能比较本地化方向。");
+      setMessage("请选择至少一个市场。可先验证单个市场，再扩展比较。");
       return;
     }
 
@@ -73,7 +73,7 @@ export function CampaignForm({
     <form className="campaign-form" onSubmit={handleSubmit}>
       <section className="campaign-setup">
         <div className="campaign-setup-copy">
-          <span>CAMPAIGN NAME</span>
+          <span>CREATIVE BATCH</span>
           <h2>这批创意要解决什么任务？</h2>
           <p>名称只用于工作台识别，不会进入模型 Prompt。</p>
         </div>
@@ -93,7 +93,7 @@ export function CampaignForm({
           <span>MARKET SET</span>
           <h2>同一商品，选择不同语境。</h2>
           <p>
-            至少选择两个市场。系统会改变场景、切入角度和表达语言，但不会改写商品身份。
+            至少选择一个市场。这里创建创意批次，不会在广告平台创建 Campaign；场景和表达需经人工确认。
           </p>
         </div>
         <fieldset className="campaign-market-grid">

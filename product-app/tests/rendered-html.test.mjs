@@ -66,7 +66,7 @@ test("server-renders the public product page", async () => {
   assert.doesNotMatch(html, /Your site is taking shape/);
 });
 
-test("login is public and connected to Supabase", async () => {
+test("unconfigured login stays public and disables sending email", async () => {
   const response = await fetch(`${origin}/login`);
   assert.equal(response.status, 200);
 
@@ -74,7 +74,8 @@ test("login is public and connected to Supabase", async () => {
   assert.match(html, /受邀邮箱/);
   assert.match(html, /未获邀请的邮箱不会创建新账号/);
   assert.match(html, /发送邮箱登录链接/);
-  assert.doesNotMatch(html, /等待连接 Supabase/);
+  assert.match(html, /等待连接 Supabase/);
+  assert.match(html, /<input[^>]*type="email"[^>]*disabled/);
 });
 
 test("auth confirmation is a client page that can receive URL fragments", async () => {
@@ -90,22 +91,20 @@ test("development login is unavailable in a production server", async () => {
   assert.doesNotMatch(loginHtml, /进入本地测试工作台/);
 });
 
-test("dashboard redirects unauthenticated visitors to login", async () => {
+test("unconfigured dashboard shows setup guidance without product data", async () => {
   const response = await fetch(`${origin}/dashboard`, { redirect: "manual" });
-  assert.equal(response.status, 307);
-  assert.match(
-    response.headers.get("location") ?? "",
-    /\/login\?next=%2Fdashboard/,
-  );
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Supabase 尚未配置/);
+  assert.doesNotMatch(html, /<section[^>]*class="product-grid"/);
 });
 
 test("product pages stay protected without an authenticated session", async () => {
   const response = await fetch(`${origin}/products/new`, { redirect: "manual" });
   assert.equal(response.status, 307);
-  assert.match(
-    response.headers.get("location") ?? "",
-    /\/login\?next=%2Fproducts%2Fnew/,
-  );
+  const location = new URL(response.headers.get("location"), origin);
+  assert.equal(location.pathname, "/login");
+  assert.equal(location.searchParams.get("next"), "/products/new");
 });
 
 test("campaign pages stay protected without an authenticated session", async () => {
@@ -113,16 +112,13 @@ test("campaign pages stay protected without an authenticated session", async () 
     redirect: "manual",
   });
   assert.equal(response.status, 307);
-  assert.match(
-    response.headers.get("location") ?? "",
-    /\/login\?next=%2Fcampaigns%2Fexample%2Fcreatives/,
-  );
+  assert.equal(new URL(response.headers.get("location"), origin).pathname, "/login");
 });
 
-test("product API rejects unauthenticated access", async () => {
+test("unconfigured product API fails closed instead of returning records", async () => {
   const response = await fetch(`${origin}/api/products`);
-  assert.equal(response.status, 401);
-  assert.deepEqual(await response.json(), { error: "请先登录" });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "Supabase 尚未配置" });
 });
 
 test("invite-only and protected-route rules are wired into the source", async () => {

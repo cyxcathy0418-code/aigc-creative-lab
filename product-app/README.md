@@ -12,7 +12,7 @@ Deploying for the first external invite? See [DEPLOYMENT.md](./DEPLOYMENT.md).
 - Product workspace at `/dashboard`; private 1–3 image upload and product
   brief at `/products/new`; Zod-validated, editable ProductSpec at
   `/products/[id]/spec`.
-- Campaign creation and multi-market creative derivation at
+- Creative batch creation (legacy `campaigns`, not TikTok advertising Campaigns) and multi-market creative derivation at
   `/products/[id]/campaigns/new` and `/campaigns/[id]/creatives`.
 - Reference-image-conditioned ad image generation (OpenAI `images.edit`,
   never text-only) and a side-by-side reference/output comparison view at
@@ -63,7 +63,7 @@ npm.cmd run dev
 
 Open `http://localhost:3000`.
 
-The connected Supabase project is configured only in the ignored `.env.local`. See [SUPABASE_SETUP.md](./SUPABASE_SETUP.md) for the current login decision and live extraction gate.
+Copy `.env.example` to `product-app/.env.local` and fill in your own Supabase test-project values. This file is ignored by Git; blank placeholders do not connect a project. See [SUPABASE_SETUP.md](./SUPABASE_SETUP.md) for the current login decision and live extraction gate.
 
 ## Checks
 
@@ -72,8 +72,14 @@ npm.cmd run lint
 npm.cmd run test
 ```
 
-`npm run test` performs a production build plus 29 automated tests covering
+`npm run test` performs a production build plus 40 automated tests covering
 ProductSpec/campaign schema boundaries, creative derivation, image-generation
 retries, ZIP packaging, authorization/RLS assumptions, and route-level smoke
 tests. It does not call OpenAI — the live extraction/derivation/generation
 gates above cover that separately.
+
+## Creative Passport — foundation only
+
+The `feature/creative-passport` branch adds projects, source-backed facts, immutable Spec/creative revisions, normalized market/locale data (including Mexico), and independent Campaign → Ad Group → Ad draft tables. Existing `campaigns` IDs and routes remain creative batches. The current UI can also create a one-market batch. New project/draft workflow screens are not built in this step.
+
+See [CREATIVE_PASSPORT_FOUNDATION.md](./CREATIVE_PASSPORT_FOUNDATION.md) for migration and verification boundaries.

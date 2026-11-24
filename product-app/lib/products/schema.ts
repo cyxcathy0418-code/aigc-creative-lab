@@ -1,24 +1,6 @@
 import { z } from "zod";
-
-export const SUPPORTED_MARKETS = [
-  "美国",
-  "欧洲",
-  "日本",
-  "韩国",
-  "东南亚",
-] as const;
-
-// ASCII codes for generated filenames. Supabase Storage's signed-URL
-// `download` option and some ZIP tools mishandle non-ASCII filenames, so
-// downloaded files use these instead of the Chinese market label.
-export const MARKET_FILE_CODES: Record<(typeof SUPPORTED_MARKETS)[number], string> =
-  {
-    美国: "US",
-    欧洲: "EU",
-    日本: "JP",
-    韩国: "KR",
-    东南亚: "SEA",
-  };
+import { SUPPORTED_MARKETS } from "../markets.ts";
+export { SUPPORTED_MARKETS, MARKET_FILE_CODES, normalizeMarket } from "../markets.ts";
 
 export const SUPPORTED_IMAGE_TYPES = [
   "image/jpeg",
@@ -162,7 +144,7 @@ export const ProductBriefSchema = z.object({
   targetMarkets: z
     .array(z.enum(SUPPORTED_MARKETS))
     .min(1, "请至少选择一个目标市场")
-    .max(5)
+    .max(6)
     .refine(
       (markets) => new Set(markets).size === markets.length,
       "目标市场不能重复",

@@ -1,6 +1,13 @@
 import type { ProductSpec } from "../products/schema.ts";
 
 export const MARKET_LOCALIZATION_POLICIES = {
+  墨西哥: {
+    language: "Spanish (Mexico)",
+    scene: "A concrete everyday use situation compatible with the confirmed product. Treat the situation as a creative hypothesis, not a national preference.",
+    angle: "Explain a confirmed benefit in context; do not infer preferences, income, climate, or family structure from nationality.",
+    voice: "Natural Mexican Spanish, clear and concise; local wording requires human review.",
+    compliance: "No invented product facts, prices, endorsements, or cultural generalizations. Request local review.",
+  },
   美国: {
     language: "English (US)",
     scene: "An individual-led active lifestyle scene: training, a morning run, or an outdoor pursuit. Casting should feel self-directed, confident, and naturally diverse.",
