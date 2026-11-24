@@ -1,3 +1,4 @@
+import { draftHash, type Workspace } from "./workflow.ts";
 async function database() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const r = indexedDB.open("creative-passport-demo", 1);
@@ -30,4 +31,27 @@ export async function cachedVideo(key: string): Promise<Blob | null> {
   } finally {
     db.close();
   }
+}
+
+export async function recoverWorkspace(
+  load: () => Promise<Workspace>,
+  readVideo: (key: string) => Promise<Blob | null>,
+) {
+  const workspace = await load();
+  let video: Blob | null = null,
+    videoHash: string | null = null;
+  const snapshot = workspace.versions.at(-1);
+  if (
+    workspace.draft?.scriptConfirmed &&
+    snapshot &&
+    (await draftHash(workspace.draft)) === snapshot.hash
+  ) {
+    try {
+      video = await readVideo(`${workspace.draft.id}:${snapshot.hash}`);
+      if (video) videoHash = snapshot.hash;
+    } catch {
+      /* Saved inputs remain usable if device cache is unavailable. */
+    }
+  }
+  return { workspace, video, videoHash };
 }

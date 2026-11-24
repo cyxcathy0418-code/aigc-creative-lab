@@ -2,18 +2,34 @@ import { z } from "zod";
 
 export const DEMO_PROVIDER = "demo-template-v1";
 export const SHOT_DURATIONS = [3, 4, 5, 3] as const;
-export const FactSchema = z.object({
+const EvidenceSchema = z.object({
   id: z.string().uuid(),
-  statement: z.string().trim().min(1).max(220),
-  source: z.string().trim().min(1).max(600),
-  adCopy: z.string().trim().min(1).max(90),
-  confirmed: z.boolean(),
+  statement: z.string(),
+  source: z.string(),
+  adCopy: z.string(),
 });
+export const FactSchema = z
+  .object({
+    id: z.string().uuid(),
+    statement: z.string().trim().max(220),
+    source: z.string().trim().max(600),
+    adCopy: z.string().trim().max(90),
+    confirmed: z.boolean(),
+  })
+  .superRefine((f, ctx) => {
+    if (f.confirmed && (!f.statement || !f.source || !f.adCopy))
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "Enter a fact, its evidence and the advertising line before confirming.",
+      });
+  });
 export const ShotSchema = z.object({
   id: z.string().uuid(),
   duration: z.number().int().min(1).max(8),
   caption: z.string().trim().min(1).max(90),
   factIds: z.array(z.string()).max(5),
+  evidence: z.array(EvidenceSchema).max(5).default([]),
   locked: z.boolean(),
 });
 const imageSchema = z
@@ -214,11 +230,7 @@ export const demoProvider: CreativeProvider = {
 };
 export interface SpeechProvider {
   readonly id: string;
-  synthesize(input: {
-    text: string;
-    locale: string;
-    voice: string;
-  }): Promise<{
+  synthesize(input: { text: string; locale: string; voice: string }): Promise<{
     bytes: Uint8Array;
     mimeType: string;
     estimatedCostMicros: number;
@@ -255,6 +267,15 @@ export function makeStoryboard(
             id: draft.shots[i]?.id ?? crypto.randomUUID(),
             duration: SHOT_DURATIONS[i],
             locked: false,
+            evidence: e.factIds.map((id) => {
+              const f = facts.find((f) => f.id === id)!;
+              return {
+                id: f.id,
+                statement: f.statement,
+                source: f.source,
+                adCopy: f.adCopy,
+              };
+            }),
             ...e,
           },
     ),
@@ -273,6 +294,20 @@ export function validateForRender(draft: Draft): Draft {
     draft.facts.filter((f) => f.confirmed).map((f) => f.id),
   );
   for (const shot of draft.shots) {
+    for (const id of shot.factIds) {
+      const current = draft.facts.find((f) => f.id === id);
+      const captured = shot.evidence?.find((f) => f.id === id);
+      if (
+        current &&
+        (!captured ||
+          current.statement !== captured.statement ||
+          current.source !== captured.source ||
+          current.adCopy !== captured.adCopy)
+      )
+        throw new Error(
+          "Product evidence changed. Unlock affected shots and regenerate the storyboard before confirming.",
+        );
+    }
     if (shot.factIds.some((id) => !facts.has(id)))
       throw new Error("A shot references an unknown or unconfirmed fact.");
     if (shot.caption.split(/\s+/u).some((word) => word.length > 28))
@@ -306,4 +341,40 @@ export function makeSrt(draft: Draft): string {
       return out;
     })
     .join("\n");
+}
+
+export function switchDraftMarket(draft: Draft, market: "US" | "MX"): Draft {
+  const oldSample = createSampleDraft(draft.market),
+    nextSample = createSampleDraft(market);
+  return {
+    ...draft,
+    market,
+    locale: nextSample.locale,
+    audience:
+      draft.isSample && draft.audience === oldSample.audience
+        ? nextSample.audience
+        : draft.audience,
+    scenario:
+      draft.isSample && draft.scenario === oldSample.scenario
+        ? nextSample.scenario
+        : draft.scenario,
+    facts: draft.facts.map((f, i) => {
+      const original = oldSample.facts[i];
+      const untouched =
+        draft.isSample &&
+        original &&
+        f.statement === original.statement &&
+        f.source === original.source &&
+        f.adCopy === original.adCopy;
+      return {
+        ...f,
+        adCopy: untouched ? nextSample.facts[i].adCopy : f.adCopy,
+        confirmed: false,
+      };
+    }),
+    shots: [],
+    selectedDirection: null,
+    narration: null,
+    scriptConfirmed: false,
+  };
 }

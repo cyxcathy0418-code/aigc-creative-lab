@@ -195,3 +195,42 @@ test("a saved locked shot cannot change content or reference image while staying
     422,
   );
 });
+test("ordinary saves cannot remove locked shots; explicit reset preserves history", async () => {
+  const db = store();
+  const d = draft();
+  d.shots[0].locked = true;
+  const confirmed = await (
+    await mod.handleDemoRequest(
+      req("workspace", "PUT", {
+        expectedRevision: 0,
+        draft: d,
+        intent: "confirm",
+      }),
+      "alice",
+      db,
+    )
+  ).json();
+  d.shots = [];
+  d.selectedDirection = null;
+  assert.equal(
+    (
+      await mod.handleDemoRequest(
+        req("workspace", "PUT", {
+          expectedRevision: 1,
+          draft: d,
+          intent: "save",
+        }),
+        "alice",
+        db,
+      )
+    ).status,
+    422,
+  );
+  const reset = await mod.handleDemoRequest(
+    req("workspace", "PUT", { expectedRevision: 1, draft: d, intent: "reset" }),
+    "alice",
+    db,
+  );
+  assert.equal(reset.status, 200);
+  assert.deepEqual((await reset.json()).versions, confirmed.versions);
+});

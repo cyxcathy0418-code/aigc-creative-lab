@@ -63,3 +63,41 @@ test("narration metadata is part of the version identity", async () => {
   d.narration = { fileName: "voice.wav", sha256: "a".repeat(64), duration: 9 };
   assert.notEqual(await mod.draftHash(d), silent);
 });
+
+test("changed evidence cannot silently support an old storyboard", () => {
+  const d = mod.makeStoryboard(confirmedSample("US"), "scenario");
+  d.facts[1].statement = "The cup is fixed, not detachable.";
+  d.facts[1].source = "Revised product manual";
+  d.facts[1].confirmed = true;
+  assert.throws(() => mod.validateForRender(d), /evidence|regenerate|changed/i);
+});
+test("a newly added incomplete fact cannot be confirmed or advertised", () => {
+  const d = confirmedSample("US");
+  d.facts = [
+    {
+      id: crypto.randomUUID(),
+      statement: "",
+      source: "",
+      adCopy: "",
+      confirmed: true,
+    },
+  ];
+  assert.throws(() => mod.proposeDirections(d));
+});
+test("switching markets preserves edited evidence, audience and advertising lines", () => {
+  assert.equal(typeof mod.switchDraftMarket, "function");
+  const d = confirmedSample("US");
+  d.audience = "My edited audience";
+  d.scenario = "My specific scenario";
+  d.facts[0].adCopy = "A manually reviewed product line";
+  const mx = mod.switchDraftMarket(d, "MX");
+  assert.equal(mx.audience, d.audience);
+  assert.equal(mx.scenario, d.scenario);
+  assert.equal(mx.facts[0].adCopy, d.facts[0].adCopy);
+  assert.equal(mx.facts[0].confirmed, false);
+  const original = confirmedSample("US");
+  assert.notEqual(
+    mod.switchDraftMarket(original, "MX").facts[0].adCopy,
+    original.facts[0].adCopy,
+  );
+});

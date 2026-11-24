@@ -7,6 +7,7 @@ import {
   demoProvider,
   DEMO_PROVIDER,
   type Workspace,
+  canonicalDraft,
 } from "./workflow.ts";
 export interface WorkspaceStore {
   read(owner: string): Promise<{ workspace: Workspace; etag: string | null }>;
@@ -20,7 +21,8 @@ const WriteSchema = z
   .object({
     expectedRevision: z.number().int().nonnegative(),
     draft: DraftSchema,
-    intent: z.enum(["save", "confirm"]),
+    intent: z.enum(["save", "confirm", "reset", "restore"]),
+    restoreVersionId: z.string().uuid().optional(),
   })
   .strict();
 const json = (data: unknown, status = 200) =>
@@ -112,9 +114,40 @@ export async function handleDemoRequest(
           },
           409,
         );
+      if (
+        input.intent === "reset" &&
+        (input.draft.shots.length || input.draft.selectedDirection !== null)
+      )
+        return json({ error: "Reset must start a new storyboard." }, 400);
+      if (input.intent === "restore") {
+        const source = old.versions.find(
+          (v) => v.id === input.restoreVersionId,
+        );
+        if (
+          !source ||
+          canonicalDraft(source.draft) !== canonicalDraft(input.draft)
+        )
+          return json(
+            { error: "Choose a saved version from this workspace to restore." },
+            400,
+          );
+      }
       for (const oldShot of old.draft?.shots ?? []) {
         const nextShot = input.draft.shots.find((s) => s.id === oldShot.id);
         if (
+          oldShot.locked &&
+          !nextShot &&
+          !["reset", "restore"].includes(input.intent)
+        )
+          return json(
+            {
+              error:
+                "Unlock the shot before removing it, or explicitly restore/reset the storyboard.",
+            },
+            422,
+          );
+        if (
+          !["reset", "restore"].includes(input.intent) &&
           oldShot.locked &&
           nextShot?.locked &&
           (JSON.stringify(oldShot) !== JSON.stringify(nextShot) ||
@@ -152,7 +185,7 @@ export async function handleDemoRequest(
           });
         }
         draft.scriptConfirmed = true;
-      } else if (versions.at(-1)?.hash === hash) {
+      } else if (input.intent !== "restore" && versions.at(-1)?.hash === hash) {
         draft.scriptConfirmed = true;
       }
       const next = { revision: old.revision + 1, draft, versions };

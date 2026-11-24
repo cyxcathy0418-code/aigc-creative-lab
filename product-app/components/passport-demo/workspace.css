@@ -1313,3 +1313,35 @@
     white-space: normal;
   }
 }
+
+.cp-confirm-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #102b2390;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.cp-confirm-card {
+  max-width: 480px;
+  width: 100%;
+  background: white;
+  border-radius: 14px;
+  padding: 30px;
+  box-shadow: 0 30px 100px #102b2340;
+}
+.cp-confirm-card h2 {
+  font-size: 23px;
+}
+.cp-confirm-card p {
+  font-size: 15px;
+  line-height: 1.8;
+  color: #6b7c67;
+  margin: 18px 0 25px;
+}
+.cp-confirm-card > div {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}

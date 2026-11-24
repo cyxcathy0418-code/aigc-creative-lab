@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import {
   createSampleDraft,
+  switchDraftMarket,
   makeSrt,
   validateForRender,
   type Draft,
@@ -22,6 +23,7 @@ import {
 import {
   cacheVideo,
   cachedVideo,
+  recoverWorkspace,
 } from "../../lib/passport-demo/artifact-cache";
 
 const steps = [
@@ -220,14 +222,31 @@ export default function WorkspaceApp() {
   const [rendering, setRendering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [video, setVideo] = useState<Blob | null>(null);
+  const [videoHash, setVideoHash] = useState<string | null>(null);
+  const [pendingReset, setPendingReset] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const videoRef = useRef<string | null>(null);
   const [audio, setAudio] = useState<AudioBuffer>();
   const [audioName, setAudioName] = useState("");
   const controller = useRef<AbortController | null>(null);
+  const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
+  const confirmResolver = useRef<((value: boolean) => void) | null>(null);
+  function requestConfirmation(message: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      confirmResolver.current = resolve;
+      setConfirmMessage(message);
+    });
+  }
+  function finishConfirmation(value: boolean) {
+    setConfirmMessage(null);
+    confirmResolver.current?.(value);
+    confirmResolver.current = null;
+  }
+
   const latest = workspace.versions.at(-1);
   const confirmedCount = draft.facts.filter((f) => f.confirmed).length;
-  function replaceVideo(blob: Blob | null) {
+  function replaceVideo(blob: Blob | null, hash: string | null = null) {
+    setVideoHash(hash);
     if (videoRef.current) URL.revokeObjectURL(videoRef.current);
     videoRef.current = blob ? URL.createObjectURL(blob) : null;
     setVideoUrl(videoRef.current);
@@ -235,24 +254,15 @@ export default function WorkspaceApp() {
   }
   useEffect(() => {
     let active = true;
-    void api<Workspace>("workspace")
-      .then((data) => {
+    void recoverWorkspace(() => api<Workspace>("workspace"), cachedVideo)
+      .then(({ workspace: data, video, videoHash }) => {
         if (!active) return;
         setWorkspace(data);
         if (data.draft) {
           setDraft(data.draft);
-          setStep(data.draft.shots.length ? 2 : 0);
-          const snapshot = data.versions.at(-1);
-          if (snapshot && data.draft.scriptConfirmed)
-            void cachedVideo(`${data.draft.id}:${snapshot.hash}`)
-              .then((blob) => {
-                if (active && blob) {
-                  replaceVideo(blob);
-                  setStep(3);
-                }
-              })
-              .catch(() => {});
+          setStep(video ? 3 : data.draft.shots.length ? 2 : 0);
         }
+        if (video) replaceVideo(video, videoHash);
       })
       .catch((e) => {
         if (active) setError(e.message);
@@ -303,12 +313,18 @@ export default function WorkspaceApp() {
       setBusy(false);
     }
   }
-  async function save(intent: "save" | "confirm" = "save", nextDraft = draft) {
+  async function save(
+    intent: "save" | "confirm" | "restore" = "save",
+    nextDraft = draft,
+    restoreVersionId?: string,
+  ) {
     const data = await api<Workspace>("workspace", "PUT", {
       expectedRevision: workspace.revision,
       draft: nextDraft,
-      intent,
+      intent: intent === "save" && pendingReset ? "reset" : intent,
+      ...(restoreVersionId ? { restoreVersionId } : {}),
     });
+    setPendingReset(false);
     setWorkspace(data);
     setDraft(data.draft!);
     setDirty(false);
@@ -362,7 +378,7 @@ export default function WorkspaceApp() {
           "Re-upload the saved narration file, or remove it and confirm a silent version.",
         );
       const blob = await renderVideo(draft, setProgress, audio, ctrl.signal);
-      replaceVideo(blob);
+      replaceVideo(blob, latest?.hash ?? null);
       if (latest) {
         try {
           await cacheVideo(`${draft.id}:${latest.hash}`, blob);
@@ -379,32 +395,17 @@ export default function WorkspaceApp() {
       setRendering(false);
     }
   }
-  function switchMarket(market: "US" | "MX") {
+  async function switchMarket(market: "US" | "MX") {
     if (market === draft.market) return;
     if (
       draft.shots.length &&
-      !window.confirm(
+      !(await requestConfirmation(
         "Switching markets clears the current storyboard. Saved versions remain in History.",
-      )
+      ))
     )
       return;
-    const sample = createSampleDraft(market);
-    change({
-      market,
-      locale: sample.locale,
-      audience: draft.isSample ? sample.audience : draft.audience,
-      scenario: draft.isSample ? sample.scenario : draft.scenario,
-      facts: draft.facts.map((f, i) => ({
-        ...f,
-        adCopy: draft.isSample
-          ? (sample.facts[i]?.adCopy ?? f.adCopy)
-          : f.adCopy,
-        confirmed: false,
-      })),
-      shots: [],
-      selectedDirection: null,
-      narration: null,
-    });
+    change(switchDraftMarket(draft, market));
+    setPendingReset(true);
     setDirections([]);
     setStep(0);
     setAudio(undefined);
@@ -412,22 +413,30 @@ export default function WorkspaceApp() {
   }
   async function restore(snapshot: Snapshot) {
     if (
-      dirty &&
-      !window.confirm("Replace unsaved changes with this saved version?")
+      !(await requestConfirmation(
+        `Restore version ${snapshot.version} as a new draft? This replaces the current storyboard, including its locks. Saved versions remain intact.`,
+      ))
     )
       return;
-    change({ ...snapshot.draft, scriptConfirmed: false });
-    setStep(2);
-    setView("create");
-    setAudio(undefined);
-    setAudioName("");
+    await action(async () => {
+      await save(
+        "restore",
+        { ...snapshot.draft, scriptConfirmed: false },
+        snapshot.id,
+      );
+      replaceVideo(null);
+      setStep(2);
+      setView("create");
+      setAudio(undefined);
+      setAudioName("");
+    });
   }
-  function reload() {
+  async function reload() {
     if (
       dirty &&
-      !window.confirm(
+      !(await requestConfirmation(
         "Reload the last saved project? Your unsaved changes will be replaced.",
-      )
+      ))
     )
       return;
     window.location.reload();
@@ -435,6 +444,54 @@ export default function WorkspaceApp() {
   const blocked = busy || rendering || !loaded;
   return (
     <div className="cp-root">
+      {confirmMessage && (
+        <div className="cp-confirm-shade">
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="cp-confirm-title"
+            aria-describedby="cp-confirm-message"
+            className="cp-confirm-card"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") finishConfirmation(false);
+              if (event.key === "Tab") {
+                const buttons = event.currentTarget.querySelectorAll("button");
+                if (event.shiftKey && document.activeElement === buttons[0]) {
+                  event.preventDefault();
+                  buttons[1]?.focus();
+                } else if (
+                  !event.shiftKey &&
+                  document.activeElement === buttons[1]
+                ) {
+                  event.preventDefault();
+                  buttons[0]?.focus();
+                }
+              }
+            }}
+          >
+            <h2 id="cp-confirm-title">Keep the creative record intact.</h2>
+            <p id="cp-confirm-message">{confirmMessage}</p>
+            <div>
+              <button
+                ref={(node) => {
+                  node?.focus();
+                }}
+                className="cp-button cp-button-outline"
+                onClick={() => finishConfirmation(false)}
+              >
+                Keep editing
+              </button>
+              <button
+                className="cp-button cp-button-dark"
+                onClick={() => finishConfirmation(true)}
+              >
+                Continue
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       <aside className="cp-sidebar">
         <a
           className="cp-brand"
@@ -822,6 +879,7 @@ export default function WorkspaceApp() {
                               <Field label={`Fact ${index + 1}`}>
                                 <input
                                   value={fact.statement}
+                                  placeholder="Enter a product fact"
                                   maxLength={220}
                                   onChange={(e) =>
                                     editFact(index, {
@@ -834,6 +892,7 @@ export default function WorkspaceApp() {
                                 <textarea
                                   rows={2}
                                   value={fact.source}
+                                  placeholder="Add the source or excerpt"
                                   maxLength={600}
                                   onChange={(e) =>
                                     editFact(index, { source: e.target.value })
@@ -846,6 +905,7 @@ export default function WorkspaceApp() {
                               >
                                 <input
                                   value={fact.adCopy}
+                                  placeholder="Write the advertising line"
                                   maxLength={90}
                                   onChange={(e) =>
                                     editFact(index, { adCopy: e.target.value })
@@ -856,6 +916,11 @@ export default function WorkspaceApp() {
                                 <input
                                   type="checkbox"
                                   checked={fact.confirmed}
+                                  disabled={
+                                    !fact.statement.trim() ||
+                                    !fact.source.trim() ||
+                                    !fact.adCopy.trim()
+                                  }
                                   onChange={(e) =>
                                     editFact(index, {
                                       confirmed: e.target.checked,
@@ -881,9 +946,9 @@ export default function WorkspaceApp() {
                                     ...draft.facts,
                                     {
                                       id: crypto.randomUUID(),
-                                      statement: "New product fact",
-                                      source: "Add the source or excerpt",
-                                      adCopy: "Write the advertising line",
+                                      statement: "",
+                                      source: "",
+                                      adCopy: "",
                                       confirmed: false,
                                     },
                                   ],
@@ -1199,49 +1264,53 @@ export default function WorkspaceApp() {
                               : "Render 15-second preview"}
                           </button>
                         )}
-                        {video && (
-                          <div className="cp-downloads">
-                            <button
-                              className="cp-button cp-button-dark"
-                              onClick={() =>
-                                downloadBlob(
-                                  video,
-                                  `creative-passport-${draft.market}-v${latest?.version ?? 1}.mp4`,
-                                )
-                              }
-                            >
-                              <Icon name="download" />
-                              Download MP4
-                            </button>
-                            <button
-                              className="cp-button cp-button-outline"
-                              onClick={() =>
-                                void action(async () => {
-                                  await downloadPackage(
-                                    draft,
+                        {video &&
+                          videoHash === latest?.hash &&
+                          draft.scriptConfirmed &&
+                          !dirty && (
+                            <div className="cp-downloads">
+                              <button
+                                className="cp-button cp-button-dark"
+                                onClick={() =>
+                                  downloadBlob(
                                     video,
-                                    latest?.version ?? 1,
-                                  );
-                                })
-                              }
-                            >
-                              Download preview package
-                            </button>
-                            <button
-                              className="cp-text-button"
-                              onClick={() =>
-                                downloadBlob(
-                                  new Blob([makeSrt(draft)], {
-                                    type: "text/plain;charset=utf-8",
-                                  }),
-                                  "captions.srt",
-                                )
-                              }
-                            >
-                              Download SRT captions
-                            </button>
-                          </div>
-                        )}
+                                    `creative-passport-${draft.market}-v${latest?.version ?? 1}.mp4`,
+                                  )
+                                }
+                              >
+                                <Icon name="download" />
+                                Download MP4
+                              </button>
+                              <button
+                                className="cp-button cp-button-outline"
+                                onClick={() =>
+                                  void action(async () => {
+                                    await downloadPackage(
+                                      draft,
+                                      video,
+                                      latest?.version ?? 1,
+                                      videoHash!,
+                                    );
+                                  })
+                                }
+                              >
+                                Download preview package
+                              </button>
+                              <button
+                                className="cp-text-button"
+                                onClick={() =>
+                                  downloadBlob(
+                                    new Blob([makeSrt(draft)], {
+                                      type: "text/plain;charset=utf-8",
+                                    }),
+                                    "captions.srt",
+                                  )
+                                }
+                              >
+                                Download SRT captions
+                              </button>
+                            </div>
+                          )}
                         <div className="cp-context-note">
                           <Icon name="film" size={17} />
                           <span>

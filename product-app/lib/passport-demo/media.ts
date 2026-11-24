@@ -1,4 +1,9 @@
-import { validateForRender, makeSrt, type Draft } from "./workflow.ts";
+import {
+  validateForRender,
+  makeSrt,
+  draftHash,
+  type Draft,
+} from "./workflow.ts";
 import { sampleImageUrl } from "./sample-art.ts";
 export function imageUrl(draft: Draft) {
   return draft.imageDataUrl === "sample:coffee"
@@ -260,7 +265,12 @@ export async function downloadPackage(
   draft: Draft,
   video: Blob,
   version: number,
+  artifactHash: string,
 ) {
+  if ((await draftHash(draft)) !== artifactHash)
+    throw new Error(
+      "This video belongs to a different saved version. Render the current script before exporting.",
+    );
   const { zipSync, strToU8 } = await import("fflate");
   const manifest = {
     product: draft.productName,
