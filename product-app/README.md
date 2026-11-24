@@ -72,7 +72,7 @@ npm.cmd run lint
 npm.cmd run test
 ```
 
-`npm run test` performs a production build plus 40 automated tests covering
+`npm run test` performs a production build plus 50 automated tests covering
 ProductSpec/campaign schema boundaries, creative derivation, image-generation
 retries, ZIP packaging, authorization/RLS assumptions, and route-level smoke
 tests. It does not call OpenAI — the live extraction/derivation/generation

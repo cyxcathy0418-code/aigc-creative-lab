@@ -106,6 +106,10 @@ returns trigger language plpgsql security invoker set search_path = '' as $$
 begin
   if tg_op='INSERT' then
     if new.version<>1 then raise exception 'New Spec must start at version 1'; end if;
+    if exists(select 1 from public.product_spec_versions where product_id=new.product_id)
+       or exists(select 1 from public.campaigns where product_id=new.product_id) then
+      raise exception 'Existing Spec history cannot restart; restore the original record or create a new product';
+    end if;
   else
     if new.product_id<>old.product_id then raise exception 'Spec product cannot change'; end if;
     if (new.spec is distinct from old.spec or new.version<>old.version)
@@ -126,6 +130,9 @@ begin
 end;
 $$;
 revoke all on function public.capture_spec_revision() from public,anon,authenticated;
+-- Standalone removal would allow history to be lost/reused. Parent cascades
+-- still execute through PostgreSQL referential actions.
+revoke delete on public.product_specs from authenticated,anon;
 create trigger product_specs_guard_revision before insert or update on public.product_specs
   for each row execute function public.guard_spec_revision();
 create trigger product_specs_capture_revision after insert or update on public.product_specs
@@ -176,10 +183,10 @@ create table public.product_facts (
   user_id uuid not null default auth.uid(), source_id uuid not null,
   statement text not null check(length(trim(statement))>0),
   confirmation_status text not null default 'draft' check(confirmation_status in ('draft','confirmed')),
-  confirmed_by uuid references auth.users(id), confirmed_at timestamptz,
+  confirmed_by uuid references auth.users(id) deferrable initially deferred, confirmed_at timestamptz,
   created_at timestamptz not null default now(), unique(id,project_id,product_id,user_id),
   foreign key(project_id,product_id,user_id) references public.project_products(project_id,product_id,user_id) on delete cascade,
-  foreign key(source_id,project_id,product_id,user_id) references public.product_sources(id,project_id,product_id,user_id),
+  foreign key(source_id,project_id,product_id,user_id) references public.product_sources(id,project_id,product_id,user_id) deferrable initially deferred,
   check((confirmation_status='draft' and confirmed_by is null and confirmed_at is null)
      or (confirmation_status='confirmed' and confirmed_by is not null and confirmed_at is not null))
 );
@@ -201,13 +208,11 @@ end;
 $$;
 create trigger product_facts_confirmation before insert or update on public.product_facts
   for each row execute function public.guard_fact_confirmation();
+-- Raw evidence is append-only, including before confirmation. An edited
+-- source becomes a new record; source changes cannot race fact confirmation.
 create function public.guard_confirmed_source()
 returns trigger language plpgsql security invoker set search_path = '' as $$
-begin
-  if exists(select 1 from public.product_facts where source_id=old.id and confirmation_status='confirmed') then
-    raise exception 'Confirmed evidence is immutable; create a new source';
-  end if; return new;
-end;
+begin raise exception 'Source records are immutable; create a new source'; end;
 $$;
 create trigger product_sources_confirmed before update on public.product_sources
   for each row execute function public.guard_confirmed_source();
@@ -235,13 +240,15 @@ create table public.creative_variants (
   variant_kind text not null check(variant_kind in ('B0','B1')),
   parent_id uuid, lineage_id uuid not null default gen_random_uuid(), revision integer not null default 1 check(revision>0),
   status text not null default 'draft' check(status in ('draft','script_confirmed','needs_review','candidate')),
+  evidence_locked boolean not null default false,
   direction text not null default '', script jsonb not null default '{}' check(jsonb_typeof(script)='object'),
   shots jsonb not null default '[]' check(jsonb_typeof(shots)='array'),
   created_at timestamptz not null default now(), unique(id,project_id,product_id,user_id), unique(lineage_id,revision),
+  unique(id,project_id,product_id,user_id,market_code,locale),
   foreign key(project_id,product_id,user_id) references public.project_products(project_id,product_id,user_id) on delete cascade,
-  foreign key(spec_version_id,product_id,user_id) references public.product_spec_versions(id,product_id,user_id),
-  foreign key(legacy_batch_id,product_id,user_id) references public.campaigns(id,product_id,user_id),
-  foreign key(parent_id,project_id,product_id,user_id) references public.creative_variants(id,project_id,product_id,user_id),
+  foreign key(spec_version_id,product_id,user_id) references public.product_spec_versions(id,product_id,user_id) deferrable initially deferred,
+  foreign key(legacy_batch_id,product_id,user_id) references public.campaigns(id,product_id,user_id) deferrable initially deferred,
+  foreign key(parent_id,project_id,product_id,user_id) references public.creative_variants(id,project_id,product_id,user_id) deferrable initially deferred,
   foreign key(market_code,locale) references public.market_locales(market_code,locale)
 );
 create function public.guard_creative_revision()
@@ -249,11 +256,13 @@ returns trigger language plpgsql security invoker set search_path = '' as $$
 declare parent public.creative_variants;
 begin
   if tg_op='UPDATE' then
-    if (to_jsonb(new)-'status') is distinct from (to_jsonb(old)-'status') then
+    new.evidence_locked := old.evidence_locked or new.status in ('script_confirmed','candidate');
+    if (to_jsonb(new)-'status'-'evidence_locked') is distinct from (to_jsonb(old)-'status'-'evidence_locked') then
       raise exception 'Creative content is immutable; insert a revision';
     end if;
     return new;
   end if;
+  new.evidence_locked := new.status in ('script_confirmed','candidate');
   if new.parent_id is null then
     if new.revision<>1 then raise exception 'Root creative must start at revision 1'; end if;
     new.lineage_id:=new.id;
@@ -273,17 +282,29 @@ create table public.creative_variant_facts (
   variant_id uuid not null, fact_id uuid not null, project_id uuid not null, product_id uuid not null,
   user_id uuid not null default auth.uid(), primary key(variant_id,fact_id),
   foreign key(variant_id,project_id,product_id,user_id) references public.creative_variants(id,project_id,product_id,user_id) on delete cascade,
-  foreign key(fact_id,project_id,product_id,user_id) references public.product_facts(id,project_id,product_id,user_id)
+  foreign key(fact_id,project_id,product_id,user_id) references public.product_facts(id,project_id,product_id,user_id) deferrable initially deferred
 );
 create function public.require_confirmed_fact()
 returns trigger language plpgsql security invoker set search_path = '' as $$
+declare old_id uuid; new_id uuid; variant public.creative_variants;
 begin
+  if tg_op<>'INSERT' then old_id:=old.variant_id; end if;
+  if tg_op<>'DELETE' then new_id:=new.variant_id; end if;
+  -- Serialize evidence changes with confirmation on each individual variant.
+  for variant in select * from public.creative_variants where id in (old_id,new_id) order by id for update loop
+    if variant.evidence_locked
+       and exists(select 1 from public.projects where id=variant.project_id)
+       and exists(select 1 from public.products where id=variant.product_id) then
+      raise exception 'Confirmed creative evidence is immutable; insert a revision';
+    end if;
+  end loop;
+  if tg_op='DELETE' then return old; end if;
   if not exists(select 1 from public.product_facts where id=new.fact_id and confirmation_status='confirmed') then
     raise exception 'Creative claims require confirmed facts';
   end if; return new;
 end;
 $$;
-create trigger creative_variant_facts_confirmed before insert or update on public.creative_variant_facts
+create trigger creative_variant_facts_confirmed before insert or update or delete on public.creative_variant_facts
   for each row execute function public.require_confirmed_fact();
 
 create table public.ad_campaign_drafts (
@@ -311,7 +332,7 @@ create table public.ad_group_drafts (
   bid_strategy text not null default 'MAXIMUM_DELIVERY' check(bid_strategy='MAXIMUM_DELIVERY'),
   budget_mode text check(budget_mode in ('DAILY','LIFETIME')), budget_amount numeric(18,4),
   starts_at timestamptz, ends_at timestamptz, created_at timestamptz not null default now(),
-  unique(id,project_id,product_id,user_id),
+  unique(id,project_id,product_id,user_id), unique(id,project_id,product_id,user_id,market_code,locale),
   foreign key(project_id,product_id,user_id) references public.project_products(project_id,product_id,user_id) on delete cascade,
   foreign key(campaign_id,project_id,user_id) references public.ad_campaign_drafts(id,project_id,user_id) on delete cascade,
   foreign key(market_code,locale) references public.market_locales(market_code,locale),
@@ -339,50 +360,35 @@ create trigger ad_campaign_budget_scope before update on public.ad_campaign_draf
 create table public.ad_drafts (
   id uuid primary key default gen_random_uuid(), project_id uuid not null, ad_group_id uuid not null, product_id uuid not null,
   user_id uuid not null default auth.uid(), name text not null check(length(trim(name))>0),
+  market_code text not null, locale text not null,
   identity_details jsonb not null default '{}' check(jsonb_typeof(identity_details)='object'),
   copy text not null default '', cta text not null default '', destination_url text,
   tracking jsonb not null default '{}' check(jsonb_typeof(tracking)='object'),
   created_at timestamptz not null default now(), unique(id,project_id,product_id,user_id),
-  foreign key(ad_group_id,project_id,product_id,user_id) references public.ad_group_drafts(id,project_id,product_id,user_id) on delete cascade
+  unique(id,project_id,product_id,user_id,market_code,locale),
+  foreign key(ad_group_id,project_id,product_id,user_id,market_code,locale) references public.ad_group_drafts(id,project_id,product_id,user_id,market_code,locale) on delete cascade deferrable initially deferred
 );
 create table public.ad_asset_bindings (
   ad_id uuid not null, variant_id uuid not null, project_id uuid not null, product_id uuid not null,
   user_id uuid not null default auth.uid(), primary key(ad_id,variant_id),
-  foreign key(ad_id,project_id,product_id,user_id) references public.ad_drafts(id,project_id,product_id,user_id) on delete cascade,
-  foreign key(variant_id,project_id,product_id,user_id) references public.creative_variants(id,project_id,product_id,user_id)
+  market_code text not null, locale text not null,
+  foreign key(ad_id,project_id,product_id,user_id,market_code,locale) references public.ad_drafts(id,project_id,product_id,user_id,market_code,locale) on delete cascade deferrable initially deferred,
+  foreign key(variant_id,project_id,product_id,user_id,market_code,locale) references public.creative_variants(id,project_id,product_id,user_id,market_code,locale) deferrable initially deferred
 );
-create function public.guard_ad_asset_market()
+create function public.sync_ad_market()
 returns trigger language plpgsql security invoker set search_path = '' as $$
 begin
-  if not exists(select 1 from public.ad_drafts a join public.ad_group_drafts g on g.id=a.ad_group_id
-    join public.creative_variants v on v.id=new.variant_id
-    where a.id=new.ad_id and g.market_code=v.market_code and g.locale=v.locale) then
-    raise exception 'Ad and creative market/locale must match';
+  if tg_table_name='ad_drafts' then
+    select market_code,locale into new.market_code,new.locale from public.ad_group_drafts where id=new.ad_group_id;
+  else
+    select market_code,locale into new.market_code,new.locale from public.ad_drafts where id=new.ad_id;
   end if; return new;
 end;
 $$;
+create trigger ad_drafts_market before insert or update on public.ad_drafts
+  for each row execute function public.sync_ad_market();
 create trigger ad_asset_bindings_market before insert or update on public.ad_asset_bindings
-  for each row execute function public.guard_ad_asset_market();
-create function public.guard_bound_market_change()
-returns trigger language plpgsql security invoker set search_path = '' as $$
-begin
-  if tg_table_name='ad_group_drafts' then
-    if exists(select 1 from public.ad_drafts a join public.ad_asset_bindings b on b.ad_id=a.id
-      join public.creative_variants v on v.id=b.variant_id where a.ad_group_id=new.id
-      and (v.market_code<>new.market_code or v.locale<>new.locale)) then
-      raise exception 'Review existing asset bindings before changing group market';
-    end if;
-  elsif exists(select 1 from public.ad_asset_bindings b join public.creative_variants v on v.id=b.variant_id
-      join public.ad_group_drafts g on g.id=new.ad_group_id where b.ad_id=new.id
-      and (v.market_code<>g.market_code or v.locale<>g.locale)) then
-    raise exception 'Review existing asset bindings before moving this ad';
-  end if; return new;
-end;
-$$;
-create trigger ad_groups_bound_market before update on public.ad_group_drafts
-  for each row execute function public.guard_bound_market_change();
-create trigger ads_bound_market before update on public.ad_drafts
-  for each row execute function public.guard_bound_market_change();
+  for each row execute function public.sync_ad_market();
 
 -- All writable objects carry owner IDs and composite FKs, so even privileged
 -- inserts cannot accidentally cross ownership/project/product boundaries.

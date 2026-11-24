@@ -10,7 +10,7 @@ export const ids = {
   batch: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
 };
 
-export async function createDatabase() {
+export async function createDatabase({ missingSpec = false } = {}) {
   const db = new PGlite({ extensions: { pgcrypto } });
   await db.exec(`
     create role authenticated; create role anon;
@@ -41,6 +41,7 @@ export async function createDatabase() {
     insert into market_creatives(campaign_id,market,language,content,image_prompt_final,anchor_block)
     values ('${ids.batch}','欧洲','English (international)','{"legacy":true}','saved prompt','saved anchor');
   `);
+  if (missingSpec) await db.exec("delete from product_specs");
   for (const name of names.filter((name) => name.startsWith("202611"))) {
     await db.exec(await readFile(new URL(name, dir), "utf8"));
   }
@@ -58,5 +59,21 @@ export async function ownerProject(db, name = "Pilot") {
     const project = (await db.query("insert into projects(name) values ($1) returning id", [name])).rows[0].id;
     await db.query("insert into project_products(project_id,product_id) values ($1,$2)", [project, ids.product]);
     return project;
+  });
+}
+
+export async function populatedGraph(db) {
+  const project = await ownerProject(db);
+  return asUser(db, ids.user, async () => {
+    const source = (await db.query("insert into product_sources(project_id,product_id,kind,excerpt) values ($1,$2,'merchant_text','Portable') returning id", [project,ids.product])).rows[0].id;
+    const fact = (await db.query("insert into product_facts(project_id,product_id,source_id,statement,confirmation_status) values ($1,$2,$3,'Portable','confirmed') returning id", [project,ids.product,source])).rows[0].id;
+    const snapshot = (await db.query("select id from product_spec_versions where product_id=$1", [ids.product])).rows[0].id;
+    const variant = (await db.query("insert into creative_variants(project_id,product_id,spec_version_id,market_code,locale,variant_kind) values ($1,$2,$3,'US','en-US','B1') returning id", [project,ids.product,snapshot])).rows[0].id;
+    await db.query("insert into creative_variant_facts(variant_id,fact_id,project_id,product_id) values ($1,$2,$3,$4)", [variant,fact,project,ids.product]);
+    const campaign = (await db.query("insert into ad_campaign_drafts(project_id,name) values ($1,'US_TRAFFIC_CUP') returning id", [project])).rows[0].id;
+    const group = (await db.query("insert into ad_group_drafts(project_id,campaign_id,product_id,name,market_code,locale) values ($1,$2,$3,'US','US','en-US') returning id", [project,campaign,ids.product])).rows[0].id;
+    const ad = (await db.query("insert into ad_drafts(project_id,ad_group_id,product_id,name) values ($1,$2,$3,'Ad') returning id", [project,group,ids.product])).rows[0].id;
+    await db.query("insert into ad_asset_bindings(ad_id,variant_id,project_id,product_id) values ($1,$2,$3,$4)", [ad,variant,project,ids.product]);
+    return { project,source,fact,variant,campaign,group,ad };
   });
 }

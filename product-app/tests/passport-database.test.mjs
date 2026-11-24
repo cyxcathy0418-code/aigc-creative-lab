@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { asUser, createDatabase, ids, ownerProject } from "./helpers/passport-db.mjs";
+import { asUser, createDatabase, ids, ownerProject, populatedGraph } from "./helpers/passport-db.mjs";
 
 test("migration preserves legacy rows and marks missing historical snapshots honestly", async () => {
   const db = await createDatabase();
@@ -123,5 +123,92 @@ test("budget type, amount, scope and schedule cannot contradict each other", asy
       await assert.rejects(() => db.query(`insert into ad_group_drafts(project_id,campaign_id,product_id,name,market_code,locale,starts_at,ends_at)
         values ($1,$2,$3,'Bad','US','en-US','2026-12-02T00:00:00Z','2026-12-01T00:00:00Z')`, [project,campaign,ids.product]));
     });
+  } finally { await db.close(); }
+});
+
+
+test("a live Spec cannot be removed and re-created as an old missing version", async () => {
+  const db = await createDatabase();
+  try {
+    await asUser(db, ids.user, async () => {
+      await assert.rejects(() => db.query("delete from product_specs where product_id=$1", [ids.product]));
+    });
+    // Even a privileged manual deletion must never allow version-number reuse.
+    await db.query("delete from product_specs where product_id=$1", [ids.product]);
+    await asUser(db, ids.user, async () => {
+      await assert.rejects(() => db.query("insert into product_specs(product_id,spec,version) values ($1,'{\"unrelated\":true}',1)", [ids.product]));
+      assert.equal((await db.query("select spec_history_status from legacy_creative_batches where id=$1", [ids.batch])).rows[0].spec_history_status, "unavailable");
+    });
+  } finally { await db.close(); }
+});
+
+test("legacy batches cannot acquire fabricated v1 when the live Spec was already missing", async () => {
+  const db = await createDatabase({ missingSpec: true });
+  try {
+    await asUser(db, ids.user, async () => {
+      await assert.rejects(() => db.query("insert into product_specs(product_id,spec,version) values ($1,'{}',1)", [ids.product]));
+      assert.equal((await db.query("select spec_history_status from legacy_creative_batches where id=$1", [ids.batch])).rows[0].spec_history_status, "unavailable");
+    });
+  } finally { await db.close(); }
+});
+
+test("raw source records are append-only even before fact confirmation", async () => {
+  const db = await createDatabase();
+  try {
+    const project = await ownerProject(db);
+    await asUser(db, ids.user, async () => {
+      const source = (await db.query("insert into product_sources(project_id,product_id,kind,excerpt) values ($1,$2,'merchant_text','Original') returning id", [project,ids.product])).rows[0].id;
+      await assert.rejects(() => db.query("update product_sources set kind='market_reference',excerpt='Different' where id=$1", [source]));
+    });
+  } finally { await db.close(); }
+});
+
+test("confirmed creative evidence stays frozen after a status downgrade", async () => {
+  const db = await createDatabase();
+  try {
+    const graph = await populatedGraph(db);
+    await asUser(db, ids.user, async () => {
+      // Draft evidence is editable.
+      await db.query("delete from creative_variant_facts where variant_id=$1", [graph.variant]);
+      await db.query("insert into creative_variant_facts(variant_id,fact_id,project_id,product_id) values ($1,$2,$3,$4)", [graph.variant,graph.fact,graph.project,ids.product]);
+      await db.query("update creative_variants set status='script_confirmed' where id=$1", [graph.variant]);
+      await db.query("update creative_variants set status='draft' where id=$1", [graph.variant]);
+      await assert.rejects(() => db.query("delete from creative_variant_facts where variant_id=$1", [graph.variant]));
+      await assert.rejects(() => db.query("update creative_variant_facts set variant_id=gen_random_uuid() where variant_id=$1", [graph.variant]));
+    });
+  } finally { await db.close(); }
+});
+
+for (const parent of ["project", "product", "account"]) {
+  test(`deleting a populated ${parent} completes all dependent cascades`, async () => {
+    const db = await createDatabase();
+    try {
+      const graph = await populatedGraph(db);
+      await asUser(db, ids.user, async () => {
+        await db.query("update creative_variants set status='script_confirmed' where id=$1", [graph.variant]);
+        if (parent === "project") await db.query("delete from projects where id=$1", [graph.project]);
+        if (parent === "product") await db.query("delete from products where id=$1", [ids.product]);
+      });
+      if (parent === "account") await db.query("delete from auth.users where id=$1", [ids.user]);
+      for (const table of ["product_sources", "product_facts", "creative_variants", "creative_variant_facts", "ad_group_drafts", "ad_drafts", "ad_asset_bindings"]) {
+        assert.equal((await db.query(`select count(*)::int as n from ${table}`)).rows[0].n, 0, table);
+      }
+      assert.equal((await db.query("select count(*)::int as n from products where id=$1", [ids.product])).rows[0].n, parent === "project" ? 1 : 0);
+      assert.equal((await db.query("select count(*)::int as n from products where id=$1", [ids.otherProduct])).rows[0].n, 1);
+    } finally { await db.close(); }
+  });
+}
+
+test("market consistency survives bypass of procedural checks via relational keys", async () => {
+  const db = await createDatabase();
+  try {
+    const graph = await populatedGraph(db);
+    // A privileged path can bypass user triggers; actual relational keys still protect joins.
+    await db.exec("alter table ad_asset_bindings disable trigger user; alter table ad_drafts disable trigger user; alter table ad_group_drafts disable trigger user");
+    const row = (await db.query("select market_code,locale from ad_drafts where id=$1", [graph.ad])).rows[0];
+    assert.deepEqual(row, { market_code: "US", locale: "en-US" });
+    await assert.rejects(() => db.query("update ad_drafts set market_code='MX',locale='es-MX' where id=$1", [graph.ad]));
+    await assert.rejects(() => db.query("update ad_group_drafts set market_code='MX',locale='es-MX' where id=$1", [graph.group]));
+    await assert.rejects(() => db.query("update ad_asset_bindings set market_code='MX',locale='es-MX' where ad_id=$1", [graph.ad]));
   } finally { await db.close(); }
 });

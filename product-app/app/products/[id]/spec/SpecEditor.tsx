@@ -97,7 +97,7 @@ export function SpecEditor({
       const response = await fetch(`/api/products/${productId}/spec`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(spec),
+        body: JSON.stringify({ expectedVersion: version, spec }),
       });
       const payload = (await response.json()) as {
         spec?: ProductSpec;

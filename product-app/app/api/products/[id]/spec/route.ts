@@ -2,9 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   formatZodError,
-  ProductSpecSchema,
   type ProductBrief,
-  type ProductSpec,
 } from "@/lib/products/schema";
 import {
   extractProductSpec,
@@ -12,33 +10,7 @@ import {
 } from "@/lib/products/extractor";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { isAuthorizedProductUser } from "@/lib/supabase/authorization";
-
-function mergeSpec(
-  current: ProductSpec,
-  patch: Record<string, unknown>,
-): unknown {
-  const mergeValue = (base: unknown, next: unknown): unknown => {
-    if (
-      base &&
-      next &&
-      typeof base === "object" &&
-      typeof next === "object" &&
-      !Array.isArray(base) &&
-      !Array.isArray(next)
-    ) {
-      const merged = { ...(base as Record<string, unknown>) };
-      for (const [key, value] of Object.entries(
-        next as Record<string, unknown>,
-      )) {
-        merged[key] = mergeValue(merged[key], value);
-      }
-      return merged;
-    }
-    return next;
-  };
-
-  return mergeValue(current, patch);
-}
+import { saveProductSpec, SpecSaveError } from "@/lib/products/spec-save";
 
 function errorResponse(message: string, status: number, extra = {}) {
   return NextResponse.json({ error: message, ...extra }, { status });
@@ -203,49 +175,11 @@ export async function PATCH(
   }
 
   const { id } = await params;
-  const { data: existing, error: readError } = await supabase
-    .from("product_specs")
-    .select("spec,version")
-    .eq("product_id", id)
-    .single();
-
-  if (readError || !existing) {
-    return NextResponse.json({ error: "未找到该商品 Spec" }, { status: 404 });
-  }
-
   try {
-    const patch = z.record(z.string(), z.unknown()).parse(await request.json());
-    const updatedSpec = ProductSpecSchema.parse(
-      mergeSpec(ProductSpecSchema.parse(existing.spec), patch),
-    );
-
-    const { data, error } = await supabase
-      .from("product_specs")
-      .update({
-        spec: updatedSpec,
-        version: existing.version + 1,
-      })
-      .eq("product_id", id)
-      .select("spec,version,updated_at")
-      .single();
-
-    if (error || !data) {
-      return NextResponse.json(
-        { error: "Spec 保存失败，请稍后重试" },
-        { status: 500 },
-      );
-    }
-
-    return NextResponse.json({
-      spec: data.spec,
-      version: data.version,
-      updatedAt: data.updated_at,
-    });
+    return NextResponse.json(await saveProductSpec(supabase, id, await request.json()));
   } catch (error) {
-    const message =
-      error instanceof z.ZodError
-        ? formatZodError(error)
-        : "提交的 Spec 格式不正确";
-    return NextResponse.json({ error: message }, { status: 400 });
+    if (error instanceof SpecSaveError) return errorResponse(error.message, error.status);
+    const message = error instanceof z.ZodError ? formatZodError(error) : "提交的 Spec 格式不正确";
+    return errorResponse(message, 400);
   }
 }
