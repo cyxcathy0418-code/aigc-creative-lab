@@ -1,5 +1,7 @@
 # Creative Passport：第一、二步交付说明
 
+完整产品需求见 [Creative Passport PRD V1.2](./docs/Creative-Passport-PRD.md)。该 PRD 描述整体目标，下文记录当前已实现的第一、二步。
+
 ## 已完成
 
 - 独立 `feature/creative-passport` 分支，原项目的 Python 实验工具和旧产品页面保留。
