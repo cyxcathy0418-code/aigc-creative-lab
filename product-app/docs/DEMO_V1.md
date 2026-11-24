@@ -42,6 +42,8 @@
 
 ## 运行与部署
 
+界面支持右上角 EN / 中文一键切换，语言偏好保存在当前浏览器；导航、四步工作流、提示与版本记录均提供中文。界面语言独立于投放市场，不翻译或改写用户已输入的商品事实、广告文案、配音及已保存版本。视觉更新为深绿侧栏、浅色编辑区和更清晰的字号层级，并适配窄屏。
+
 已部署的第一版（仅创建者可访问）：https://creative-passport-cathy-demo.cyxcathy0418.chatgpt.site 。首次访问使用创建者的 ChatGPT 账号登录。主仓库继续使用 `feature/creative-passport`；正式 Next.js 页面入口是 `/demo`。
 
 在 `product-app` 中先 `npm ci`，再 `npm run demo:build` 和 `npm run demo:dev`，本地地址为 `http://127.0.0.1:4173`。执行 `npm run demo:prepare -- /独立的站点源码目录` 可将同一套组件与服务准备为托管源，避免更改原仓库的 Git remote。站点身份保存在 `demo-host/.openai/hosting.json`，后续部署复用此身份，不重新创建站点。

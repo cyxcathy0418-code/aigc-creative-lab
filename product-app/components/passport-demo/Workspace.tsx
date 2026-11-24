@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- Shared with the standalone Worker; uploads are resized on-device and never use a Next.js image proxy. */
 import { useState, useEffect, useRef, type ReactNode } from "react";
+import { uiText, localizeNotice, readUiLanguage, directionPresentation, LANGUAGE_KEY, type UiLanguage } from "./copy";
 import {
   createSampleDraft,
   switchDraftMarket,
@@ -26,7 +27,7 @@ import {
   recoverWorkspace,
 } from "../../lib/passport-demo/artifact-cache";
 
-const steps = [
+const stepLabels = [
   "Product & facts",
   "Creative direction",
   "Storyboard",
@@ -37,6 +38,12 @@ function Icon({ name = "spark", size = 20 }: { name?: string; size?: number }) {
     spark: (
       <>
         <path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z" />
+      </>
+    ),
+    globe: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z" />
       </>
     ),
     grid: (
@@ -120,10 +127,13 @@ function Field({
 function PhonePreview({
   draft,
   videoUrl,
+  language,
 }: {
   draft: Draft;
   videoUrl: string | null;
+  language: UiLanguage;
 }) {
+  const t = (text: string) => uiText(language, text);
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     let active = true;
@@ -156,14 +166,14 @@ function PhonePreview({
           src={videoUrl}
           controls
           playsInline
-          aria-label="Rendered 15-second preview"
+          aria-label={t("Rendered 15-second preview")}
         />
       ) : draft.shots.length ? (
         <canvas
           ref={canvas}
           width="360"
           height="640"
-          aria-label="First frame of the current storyboard"
+          aria-label={t("First frame of the current storyboard")}
         />
       ) : (
         <div className="cp-phone-empty">
@@ -171,18 +181,14 @@ function PhonePreview({
             src={imageUrl(draft)}
             alt={
               draft.isSample
-                ? "Vector illustration of the fictional ROAM grinder"
-                : "Your product reference"
+                ? t("Vector illustration of the fictional ROAM grinder")
+                : t("Your product reference")
             }
           />
           <div>
-            <small>YOUR PRODUCT. A NEW PERSPECTIVE.</small>
+            <small>{t("YOUR PRODUCT. A NEW PERSPECTIVE.")}</small>
             <strong>{draft.productName}</strong>
-            <span>
-              Make a little space
-              <br />
-              for possibility.
-            </span>
+            <span>{t("Make a little space")}<br />{t("for possibility.")}</span>
           </div>
         </div>
       )}
@@ -205,6 +211,22 @@ async function api<T>(
   return result as T;
 }
 export default function WorkspaceApp() {
+  const [language, setLanguage] = useState<UiLanguage>("en");
+  const t = (text: string, values?: Record<string, string | number>) => uiText(language, text, values);
+  const steps = stepLabels.map((label) => t(label));
+  useEffect(() => {
+    try { setLanguage(readUiLanguage(window.localStorage)); } catch { /* Storage may be unavailable in private browsing. */ }
+  }, []);
+  useEffect(() => {
+    const previous = document.documentElement.lang;
+    document.documentElement.lang = language;
+    return () => { document.documentElement.lang = previous; };
+  }, [language]);
+  function toggleLanguage() {
+    const next = language === "en" ? "zh-CN" : "en";
+    setLanguage(next);
+    try { window.localStorage.setItem(LANGUAGE_KEY, next); } catch { /* The switch still works for this visit. */ }
+  }
   const [draft, setDraft] = useState<Draft>(() => createSampleDraft());
   const [workspace, setWorkspace] = useState<Workspace>({
     revision: 0,
@@ -443,7 +465,7 @@ export default function WorkspaceApp() {
   }
   const blocked = busy || rendering || !loaded;
   return (
-    <div className="cp-root">
+    <div className="cp-root" lang={language}>
       {confirmMessage && (
         <div className="cp-confirm-shade">
           <section
@@ -469,8 +491,8 @@ export default function WorkspaceApp() {
               }
             }}
           >
-            <h2 id="cp-confirm-title">Keep the creative record intact.</h2>
-            <p id="cp-confirm-message">{confirmMessage}</p>
+            <h2 id="cp-confirm-title">{t("Keep the creative record intact.")}</h2>
+            <p id="cp-confirm-message">{localizeNotice(language, confirmMessage)}</p>
             <div>
               <button
                 ref={(node) => {
@@ -478,15 +500,11 @@ export default function WorkspaceApp() {
                 }}
                 className="cp-button cp-button-outline"
                 onClick={() => finishConfirmation(false)}
-              >
-                Keep editing
-              </button>
+              >{t("Keep editing")}</button>
               <button
                 className="cp-button cp-button-dark"
                 onClick={() => finishConfirmation(true)}
-              >
-                Continue
-              </button>
+              >{t("Continue")}</button>
             </div>
           </section>
         </div>
@@ -510,74 +528,68 @@ export default function WorkspaceApp() {
             <b>passport</b>
           </span>
         </a>
-        <div className="cp-workspace-label">YOUR WORKSPACE</div>
-        <nav aria-label="Workspace">
+        <div className="cp-workspace-label">{t("YOUR WORKSPACE")}</div>
+        <nav aria-label={t("Workspace")}>
           <button
             className={view === "create" ? "active" : ""}
             onClick={() => setView("create")}
           >
-            <Icon name="grid" />
-            Creative studio<span className="cp-small-new">V1</span>
+            <Icon name="grid" />{t("Creative studio")}<span className="cp-small-new">V1</span>
           </button>
           <button
             className={view === "versions" ? "active" : ""}
             onClick={() => setView("versions")}
           >
-            <Icon name="clock" />
-            Version history
-            <span className="cp-nav-count">{workspace.versions.length}</span>
+            <Icon name="clock" />{t("Version history")}<span className="cp-nav-count">{workspace.versions.length}</span>
           </button>
           <button
             className={view === "about" ? "active" : ""}
             onClick={() => setView("about")}
           >
-            <Icon name="film" />
-            About this demo
-          </button>
+            <Icon name="film" />{t("About this demo")}</button>
         </nav>
         <div className="cp-sidebar-note">
           <span className="cp-mini-compass">✳</span>
-          <h3>
-            Make it travel.
-            <br />
-            Keep it true.
-          </h3>
-          <p>
-            Product facts stay grounded.
-            <br />
-            Creative possibilities stay open.
-          </p>
+          <h3>{t("Make it travel.")}<br />{t("Keep it true.")}</h3>
+          <p>{t("Product facts stay grounded.")}<br />{t("Creative possibilities stay open.")}</p>
         </div>
         <div className="cp-demo-badge">
-          <span>DEMO WORKSPACE</span>
+          <span>{t("DEMO WORKSPACE")}</span>
           <strong>
-            $0.00 <small>AI spend</small>
+            $0.00 <small>{t("AI spend")}</small>
           </strong>
-          <p>
-            Template suggestions.
-            <br />
-            No paid model calls.
-          </p>
+          <p>{t("Template suggestions.")}<br />{t("No paid model calls.")}</p>
         </div>
       </aside>
       <div className="cp-main">
         <header className="cp-topbar">
           <div>
-            <span className="cp-breadcrumb">
-              Workspace <span>/</span> Creative studio
-            </span>
+            <span className="cp-breadcrumb">{t("Workspace")}<span>/</span>{t("Creative studio")}</span>
             <span className="cp-save-state">
               {busy
-                ? "Saving…"
+                ? t("Saving…")
                 : !loaded
-                  ? "Connecting…"
+                  ? t("Connecting…")
                   : dirty
-                    ? "Unsaved changes"
+                    ? t("Unsaved changes")
                     : workspace.revision
-                      ? "Saved to workspace"
-                      : "New project"}
+                      ? t("Saved to workspace")
+                      : t("New project")}
             </span>
           </div>
+          <div className="cp-topbar-actions">
+          <button
+            className="cp-language-switch"
+            type="button"
+            onClick={toggleLanguage}
+            aria-label={t(language === "en" ? "Switch to Chinese" : "Switch to English")}
+            title={t("Interface language only. Advertising copy stays in the target market language.")}
+          >
+            <Icon name="globe" size={17} />
+            <span lang="en" className={language === "en" ? "selected" : ""}>EN</span>
+            <span className="cp-language-divider" aria-hidden="true" />
+            <span lang="zh-CN" className={language === "zh-CN" ? "selected" : ""}>中文</span>
+          </button>
           <button
             className="cp-button cp-button-outline"
             disabled={blocked}
@@ -587,78 +599,47 @@ export default function WorkspaceApp() {
               })
             }
           >
-            <Icon name="save" size={17} />
-            Save project
-          </button>
+            <Icon name="save" size={17} />{t("Save project")}</button>
+          </div>
         </header>
         <main className="cp-content">
           {view === "about" ? (
             <section className="cp-about">
-              <span className="cp-eyebrow">THE FIRST CHAPTER</span>
-              <h1>
-                A real workflow.
-                <br />
-                An honest demo.
-              </h1>
-              <p>
-                This is the first working version of Creative Passport: one
-                product, one market, a grounded storyboard, and a real
-                downloadable video.
-              </p>
+              <span className="cp-eyebrow">{t("THE FIRST CHAPTER")}</span>
+              <h1>{t("A real workflow.")}<br />{t("An honest demo.")}</h1>
+              <p>{t("This is the first working version of Creative Passport: one product, one market, a grounded storyboard, and a real downloadable video.")}</p>
               <div className="cp-about-grid">
                 <article>
                   <Icon />
-                  <h2>Creative hypotheses</h2>
-                  <p>
-                    Suggestions come from editable templates, not a live
-                    language model. Your confirmed product facts are the only
-                    source of product claims.
-                  </p>
+                  <h2>{t("Creative hypotheses")}</h2>
+                  <p>{t("Suggestions come from editable templates, not a live language model. Your confirmed product facts are the only source of product claims.")}</p>
                 </article>
                 <article>
                   <Icon name="film" />
-                  <h2>Actual video, on your device</h2>
-                  <p>
-                    Your browser encodes a 1080 × 1920 H.264 MP4, at 30 fps for
-                    15 seconds. Keep this tab open while it renders. Add your
-                    own narration or export a silent captioned preview.
-                  </p>
+                  <h2>{t("Actual video, on your device")}</h2>
+                  <p>{t("Your browser encodes a 1080 × 1920 H.264 MP4, at 30 fps for 15 seconds. Keep this tab open while it renders. Add your own narration or export a silent captioned preview.")}</p>
                 </article>
                 <article>
                   <Icon name="save" />
-                  <h2>A saved starting point</h2>
-                  <p>
-                    Your project and confirmed versions are saved on the
-                    backend. Rendered videos are cached on this device and can
-                    be recreated from the saved storyboard.
-                  </p>
+                  <h2>{t("A saved starting point")}</h2>
+                  <p>{t("Your project and confirmed versions are saved on the backend. Rendered videos are cached on this device and can be recreated from the saved storyboard.")}</p>
                 </article>
                 <article>
                   <Icon name="grid" />
-                  <h2>Built toward the PRD</h2>
-                  <p>
-                    Live model generation, server-side production queues, full
-                    B0/B1 evaluation, Supabase invite accounts, and complete
-                    advertising drafts are the next stages. No ROI or cultural
-                    preference is claimed here.
-                  </p>
+                  <h2>{t("Built toward the PRD")}</h2>
+                  <p>{t("Live model generation, server-side production queues, full B0/B1 evaluation, Supabase invite accounts, and complete advertising drafts are the next stages. No ROI or cultural preference is claimed here.")}</p>
                 </article>
               </div>
               <button
                 className="cp-button cp-button-dark"
                 onClick={() => setView("create")}
-              >
-                Open creative studio
-              </button>
+              >{t("Open creative studio")}</button>
             </section>
           ) : view === "versions" ? (
             <section>
-              <span className="cp-eyebrow">YOUR CREATIVE RECORD</span>
-              <h1>Every iteration has a story.</h1>
-              <p className="cp-lead">
-                Confirmed snapshots are kept intact. Restore one as a new draft
-                to keep exploring.
-              </p>
+              <span className="cp-eyebrow">{t("YOUR CREATIVE RECORD")}</span>
+              <h1>{t("Every iteration has a story.")}</h1>
+              <p className="cp-lead">{t("Confirmed snapshots are kept intact. Restore one as a new draft to keep exploring.")}</p>
               {workspace.versions.length ? (
                 <div className="cp-history">
                   {[...workspace.versions].reverse().map((snapshot) => (
@@ -667,41 +648,33 @@ export default function WorkspaceApp() {
                         <Icon name="film" />
                       </div>
                       <div>
-                        <strong>
-                          Version {snapshot.version}{" "}
+                        <strong>{t("Version")}{" "}{snapshot.version}{" "}
                           <span className="cp-tag">
                             {snapshot.draft.market} / {snapshot.draft.locale}
                           </span>
                         </strong>
                         <p>{snapshot.draft.shots[0]?.caption}</p>
                         <small>
-                          {new Date(snapshot.createdAt).toLocaleString()} · 15
-                          seconds ·{" "}
-                          {snapshot.draft.shots.filter((s) => s.locked).length}{" "}
-                          locked shots
-                        </small>
+                          {new Date(snapshot.createdAt).toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US")}{t("· 15 seconds ·")}{" "}
+                          {snapshot.draft.shots.filter((s) => s.locked).length}{" "}{t("locked shots")}</small>
                       </div>
                       <button
                         className="cp-button cp-button-outline"
                         disabled={blocked}
                         onClick={() => void restore(snapshot)}
-                      >
-                        Restore as draft
-                      </button>
+                      >{t("Restore as draft")}</button>
                     </article>
                   ))}
                 </div>
               ) : (
                 <div className="cp-empty">
                   <Icon name="clock" size={32} />
-                  <h2>Your first version starts here.</h2>
-                  <p>Confirm a storyboard to create an immutable snapshot.</p>
+                  <h2>{t("Your first version starts here.")}</h2>
+                  <p>{t("Confirm a storyboard to create an immutable snapshot.")}</p>
                   <button
                     className="cp-button cp-button-dark"
                     onClick={() => setView("create")}
-                  >
-                    Continue creating
-                  </button>
+                  >{t("Continue creating")}</button>
                 </div>
               )}
             </section>
@@ -709,25 +682,21 @@ export default function WorkspaceApp() {
             <>
               <div className="cp-heading">
                 <div>
-                  <span className="cp-eyebrow">CREATIVITY, WITH CONTEXT</span>
-                  <h1>One product. New possibilities.</h1>
-                  <p className="cp-lead">
-                    Turn what is true about your product into a story worth
-                    exploring.
-                  </p>
+                  <span className="cp-eyebrow">{t("CREATIVITY, WITH CONTEXT")}</span>
+                  <h1>{t("One product. New possibilities.")}</h1>
+                  <p className="cp-lead">{t("Turn what is true about your product into a story worth exploring.")}</p>
                 </div>
                 <div className="cp-format">
-                  <span>15 SEC</span>
+                  <span>{t("15 SEC")}</span>
                   <i />
                   9:16
-                  <i />
-                  TRAFFIC / WEBSITE
-                </div>
+                  <i />{t("TRAFFIC / WEBSITE")}</div>
               </div>
-              <div className="cp-stepper" aria-label="Creation steps">
+              <div className="cp-stepper" aria-label={t("Creation steps")}>
                 {steps.map((label, i) => (
                   <button
-                    key={label}
+                    key={stepLabels[i]}
+                    aria-current={step === i ? "step" : undefined}
                     className={step === i ? "current" : step > i ? "done" : ""}
                     disabled={
                       blocked ||
@@ -753,31 +722,25 @@ export default function WorkspaceApp() {
                       <>
                         <div className="cp-section-heading">
                           <div>
-                            <span className="cp-eyebrow">
-                              START WITH WHAT IS TRUE
-                            </span>
-                            <h2>Meet the product.</h2>
+                            <span className="cp-eyebrow">{t("START WITH WHAT IS TRUE")}</span>
+                            <h2>{t("Meet the product.")}</h2>
                           </div>
                           <span className="cp-tag">
                             {draft.isSample
-                              ? "Fictional sample"
-                              : "Your product"}
+                              ? t("Fictional sample")
+                              : t("Your product")}
                           </span>
                         </div>
-                        <p className="cp-helper">
-                          Try the sample, or replace its image and facts with
-                          your own. Every advertising claim needs a source and
-                          your confirmation.
-                        </p>
+                        <p className="cp-helper">{t("Try the sample, or replace its image and facts with your own. Every advertising claim needs a source and your confirmation.")}</p>
                         <div className="cp-product-intro">
                           <div className="cp-product-thumbnail">
                             <img
                               src={imageUrl(draft)}
-                              alt="Product reference"
+                              alt={t("Product reference")}
                             />
                           </div>
                           <div>
-                            <Field label="Product name">
+                            <Field label={t("Product name")}>
                               <input
                                 value={draft.productName}
                                 maxLength={70}
@@ -787,9 +750,7 @@ export default function WorkspaceApp() {
                               />
                             </Field>
                             <label className="cp-upload">
-                              <Icon name="upload" size={17} />
-                              Replace product image
-                              <input
+                              <Icon name="upload" size={17} />{t("Replace product image")}<input
                                 type="file"
                                 accept="image/jpeg,image/png,image/webp"
                                 onChange={(e) => {
@@ -811,28 +772,22 @@ export default function WorkspaceApp() {
                                 }}
                               />
                             </label>
-                            <small className="cp-muted">
-                              JPEG, PNG or WebP · up to 10 MB
-                              <br />
-                              Resized for the demo; used as image animation.
-                            </small>
+                            <small className="cp-muted">{t("JPEG, PNG or WebP · up to 10 MB")}<br />{t("Resized for the demo; used as image animation.")}</small>
                           </div>
                         </div>
                         <div className="cp-two-fields">
-                          <Field label="Target market">
+              <Field label={t("Target market")} note={t("Interface language only. Advertising copy stays in the target market language.")}>
                             <select
                               value={draft.market}
                               onChange={(e) =>
                                 switchMarket(e.target.value as "US" | "MX")
                               }
                             >
-                              <option value="US">
-                                United States · English
-                              </option>
-                              <option value="MX">Mexico · Español</option>
+                              <option value="US">{t("United States · English")}</option>
+                              <option value="MX">{t("Mexico · Español")}</option>
                             </select>
                           </Field>
-                          <Field label="Brand tone">
+                          <Field label={t("Brand tone")}>
                             <input
                               value={draft.brandTone}
                               maxLength={100}
@@ -842,7 +797,7 @@ export default function WorkspaceApp() {
                             />
                           </Field>
                         </div>
-                        <Field label="Who is this for?">
+                        <Field label={t("Who is this for?")}>
                           <input
                             value={draft.audience}
                             maxLength={180}
@@ -852,8 +807,8 @@ export default function WorkspaceApp() {
                           />
                         </Field>
                         <Field
-                          label="A situation to explore"
-                          note="A creative hypothesis, not an assumption about a country."
+                          label={t("A situation to explore")}
+                          note={t("A creative hypothesis, not an assumption about a country.")}
                         >
                           <textarea
                             rows={2}
@@ -865,10 +820,9 @@ export default function WorkspaceApp() {
                           />
                         </Field>
                         <div className="cp-facts-title">
-                          <h3>Product facts & evidence</h3>
+                          <h3>{t("Product facts & evidence")}</h3>
                           <span>
-                            {confirmedCount} of {draft.facts.length} confirmed
-                          </span>
+                            {t("Confirmed {count} of {total}", { count: confirmedCount, total: draft.facts.length })}</span>
                         </div>
                         <div className="cp-facts">
                           {draft.facts.map((fact, index) => (
@@ -876,10 +830,10 @@ export default function WorkspaceApp() {
                               className={fact.confirmed ? "confirmed" : ""}
                               key={fact.id}
                             >
-                              <Field label={`Fact ${index + 1}`}>
+                              <Field label={t("Fact {number}", { number: index + 1 })}>
                                 <input
                                   value={fact.statement}
-                                  placeholder="Enter a product fact"
+                                  placeholder={t("Enter a product fact")}
                                   maxLength={220}
                                   onChange={(e) =>
                                     editFact(index, {
@@ -888,11 +842,11 @@ export default function WorkspaceApp() {
                                   }
                                 />
                               </Field>
-                              <Field label="Source / excerpt">
+                              <Field label={t("Source / excerpt")}>
                                 <textarea
                                   rows={2}
                                   value={fact.source}
-                                  placeholder="Add the source or excerpt"
+                                  placeholder={t("Add the source or excerpt")}
                                   maxLength={600}
                                   onChange={(e) =>
                                     editFact(index, { source: e.target.value })
@@ -900,12 +854,13 @@ export default function WorkspaceApp() {
                                 />
                               </Field>
                               <Field
-                                label={`Advertising line · ${draft.locale}`}
-                                note="Write this in the advertising language. The demo does not translate your claims automatically."
+                                label={t("Advertising line · {locale}", { locale: draft.locale })}
+                                note={t("Write this in the advertising language. The demo does not translate your claims automatically.")}
                               >
                                 <input
                                   value={fact.adCopy}
-                                  placeholder="Write the advertising line"
+                                  lang={draft.locale}
+                                  placeholder={t("Write the advertising line")}
                                   maxLength={90}
                                   onChange={(e) =>
                                     editFact(index, { adCopy: e.target.value })
@@ -929,8 +884,8 @@ export default function WorkspaceApp() {
                                 />
                                 <span>
                                   {draft.isSample
-                                    ? "I have reviewed this fictional sample fact and its example source."
-                                    : "I confirm this fact and the source that supports it."}
+                                    ? t("I have reviewed this fictional sample fact and its example source.")
+                                    : t("I confirm this fact and the source that supports it.")}
                                 </span>
                               </label>
                             </article>
@@ -955,33 +910,24 @@ export default function WorkspaceApp() {
                                 });
                             }}
                             disabled={draft.facts.length >= 5}
-                          >
-                            ＋ Add a fact
-                          </button>
+                          >{t("＋ Add a fact")}</button>
                           <button
                             className="cp-button cp-button-dark"
                             disabled={!confirmedCount}
                             onClick={() => void explore()}
                           >
-                            <Icon />
-                            Explore 3 directions
-                          </button>
+                            <Icon />{t("Explore 3 directions")}</button>
                         </div>
                       </>
                     ) : step === 1 ? (
                       <>
                         <div className="cp-section-heading">
                           <div>
-                            <span className="cp-eyebrow">
-                              THREE WAYS INTO THE STORY
-                            </span>
-                            <h2>Choose your direction.</h2>
+                            <span className="cp-eyebrow">{t("THREE WAYS INTO THE STORY")}</span>
+                            <h2>{t("Choose your direction.")}</h2>
                           </div>
                         </div>
-                        <p className="cp-helper">
-                          These are template-based creative hypotheses. Pick a
-                          starting point, then make the words your own.
-                        </p>
+                        <p className="cp-helper">{t("These are template-based creative hypotheses. Pick a starting point, then make the words your own.")}</p>
                         <div className="cp-direction-list">
                           {directions.map((direction, index) => (
                             <article
@@ -992,33 +938,29 @@ export default function WorkspaceApp() {
                                 <span className="cp-tag">
                                   {
                                     [
-                                      "SCENARIO LED",
-                                      "EVIDENCE LED",
-                                      "PRODUCT LED",
+                                      t("SCENARIO LED"),
+                                      t("EVIDENCE LED"),
+                                      t("PRODUCT LED"),
                                     ][index]
                                   }
                                 </span>
                                 <span className="cp-muted">0{index + 1}</span>
                               </div>
-                              <h3>{direction.title}</h3>
-                              <blockquote>“{direction.hook}”</blockquote>
-                              <p>{direction.description}</p>
+                              <h3>{directionPresentation(language, direction, draft).title}</h3>
+                              <blockquote lang={draft.locale}>“{direction.hook}”</blockquote>
+                              <p>{directionPresentation(language, direction, draft).description}</p>
                               <details>
-                                <summary>Why this direction?</summary>
-                                <p>{direction.reason}</p>
+                                <summary>{t("Why this direction?")}</summary>
+                                <p>{directionPresentation(language, direction, draft).reason}</p>
                                 <small>
-                                  {direction.factIds.length} confirmed fact
-                                  references · Requires local feedback
-                                </small>
+                                  {direction.factIds.length}{t("confirmed fact references · Requires local feedback")}</small>
                               </details>
                               <button
                                 className="cp-button cp-button-outline"
                                 onClick={() =>
                                   void selectDirection(direction.id)
                                 }
-                              >
-                                Use this direction
-                              </button>
+                              >{t("Use this direction")}</button>
                             </article>
                           ))}
                         </div>
@@ -1027,18 +969,12 @@ export default function WorkspaceApp() {
                       <>
                         <div className="cp-section-heading">
                           <div>
-                            <span className="cp-eyebrow">
-                              MAKE IT SOUND LIKE YOU
-                            </span>
-                            <h2>Shape the storyboard.</h2>
+                            <span className="cp-eyebrow">{t("MAKE IT SOUND LIKE YOU")}</span>
+                            <h2>{t("Shape the storyboard.")}</h2>
                           </div>
                           <span className="cp-tag">{draft.locale}</span>
                         </div>
-                        <p className="cp-helper">
-                          Four shots, one 15-second story. Edit the advertising
-                          lines, lock what works, and confirm before rendering.
-                          All scenes use your reference image.
-                        </p>
+                        <p className="cp-helper">{t("Four shots, one 15-second story. Edit the advertising lines, lock what works, and confirm before rendering. All scenes use your reference image.")}</p>
                         <div className="cp-shots">
                           {draft.shots.map((shot, index) => (
                             <article
@@ -1046,13 +982,12 @@ export default function WorkspaceApp() {
                               key={shot.id}
                             >
                               <div className="cp-shot-meta">
-                                <strong>
-                                  SHOT {String(index + 1).padStart(2, "0")}
+                                <strong>{t("SHOT")}{String(index + 1).padStart(2, "0")}
                                 </strong>
-                                <span>{shot.duration} sec</span>
+                                <span>{shot.duration}{t("sec")}</span>
                                 <button
                                   className={`cp-lock ${shot.locked ? "active" : ""}`}
-                                  aria-label={`${shot.locked ? "Unlock" : "Lock"} shot ${index + 1}`}
+                                  aria-label={t(shot.locked ? "Unlock shot {number}" : "Lock shot {number}", { number: index + 1 })}
                                   onClick={() =>
                                     change({
                                       shots: draft.shots.map((s) =>
@@ -1064,11 +999,12 @@ export default function WorkspaceApp() {
                                   }
                                 >
                                   <Icon name="lock" size={15} />
-                                  {shot.locked ? "Locked" : "Lock"}
+                                  {t(shot.locked ? "Locked" : "Lock")}
                                 </button>
                               </div>
                               <textarea
-                                aria-label={`Shot ${index + 1} caption`}
+                                aria-label={t("Shot {number} caption", { number: index + 1 })}
+                                lang={draft.locale}
                                 rows={2}
                                 maxLength={90}
                                 disabled={shot.locked}
@@ -1086,8 +1022,8 @@ export default function WorkspaceApp() {
                               <div className="cp-shot-footer">
                                 <span>
                                   {shot.factIds.length
-                                    ? `Evidence: ${shot.factIds.map((id) => `fact ${draft.facts.findIndex((f) => f.id === id) + 1}`).join(", ")}`
-                                    : "Creative framing · no product claim"}
+                                    ? t("Evidence: {facts}", { facts: shot.factIds.map((id) => t("Fact {number}", { number: draft.facts.findIndex((f) => f.id === id) + 1 })).join(", ") })
+                                    : t("Creative framing · no product claim")}
                                 </span>
                                 <small>{shot.caption.length}/90</small>
                               </div>
@@ -1096,11 +1032,7 @@ export default function WorkspaceApp() {
                         </div>
                         <div className="cp-context-note">
                           <Icon name="check" size={17} />
-                          <span>
-                            Same product reference and confirmed facts across
-                            all shots. Check the advertising language yourself;
-                            no live translation is running.
-                          </span>
+                          <span>{t("Same product reference and confirmed facts across all shots. Check the advertising language yourself; no live translation is running.")}</span>
                         </div>
                         <div className="cp-actions">
                           <button
@@ -1109,55 +1041,45 @@ export default function WorkspaceApp() {
                               setStep(1);
                               if (!directions.length) void explore();
                             }}
-                          >
-                            Revisit directions
-                          </button>
+                          >{t("Revisit directions")}</button>
                           <button
                             className="cp-button cp-button-dark"
                             onClick={() => void confirm()}
                           >
-                            <Icon name="check" size={18} />
-                            Confirm script
-                          </button>
+                            <Icon name="check" size={18} />{t("Confirm script")}</button>
                         </div>
                       </>
                     ) : (
                       <>
                         <div className="cp-section-heading">
                           <div>
-                            <span className="cp-eyebrow">
-                              FROM STORYBOARD TO SOMETHING REAL
-                            </span>
-                            <h2>Your story, in motion.</h2>
+                            <span className="cp-eyebrow">{t("FROM STORYBOARD TO SOMETHING REAL")}</span>
+                            <h2>{t("Your story, in motion.")}</h2>
                           </div>
                           <span className="cp-tag">
-                            {latest ? `VERSION ${latest.version}` : "DRAFT"}
+                            {latest ? t("VERSION {number}", { number: latest.version }) : t("DRAFT")}
                           </span>
                         </div>
-                        <p className="cp-helper">
-                          The actual MP4 is encoded on your device. Keep this
-                          tab open until it finishes. The default preview is
-                          silent, with captions.
-                        </p>
+                        <p className="cp-helper">{t("The actual MP4 is encoded on your device. Keep this tab open until it finishes. The default preview is silent, with captions.")}</p>
                         <div className="cp-render-spec">
                           <div>
-                            <span>Format</span>
+                            <span>{t("Format")}</span>
                             <strong>1080 × 1920</strong>
                           </div>
                           <div>
-                            <span>Duration</span>
-                            <strong>15 seconds</strong>
+                            <span>{t("Duration")}</span>
+                            <strong>{t("15 seconds")}</strong>
                           </div>
                           <div>
-                            <span>Frame rate</span>
-                            <strong>30 fps</strong>
+                            <span>{t("Frame rate")}</span>
+                            <strong>{t("30 fps")}</strong>
                           </div>
                           <div>
-                            <span>AI cost</span>
+                            <span>{t("AI cost")}</span>
                             <strong>$0.00</strong>
                           </div>
                         </div>
-                        <Field label="Visual template">
+                        <Field label={t("Visual template")}>
                           <select
                             value={draft.theme}
                             onChange={(e) =>
@@ -1166,23 +1088,19 @@ export default function WorkspaceApp() {
                               })
                             }
                           >
-                            <option value="forest">Forest · dark green</option>
-                            <option value="paper">Paper · clean light</option>
+                            <option value="forest">{t("Forest · dark green")}</option>
+                            <option value="paper">{t("Paper · clean light")}</option>
                           </select>
                         </Field>
                         <div className="cp-narration">
-                          <h3>
-                            Narration <span className="cp-tag">OPTIONAL</span>
+                          <h3>{t("Narration")}<span className="cp-tag">{t("OPTIONAL")}</span>
                           </h3>
-                          <p>
-                            Upload audio you have the right to use, up to 15
-                            seconds. No automatic TTS is enabled in this demo.
-                          </p>
+                          <p>{t("Upload audio you have the right to use, up to 15 seconds. No automatic TTS is enabled in this demo.")}</p>
                           <label className="cp-upload">
                             <Icon name="upload" size={17} />
                             {audioName ||
                               draft.narration?.fileName ||
-                              "Add your own narration"}
+                              t("Add your own narration")}
                             <input
                               type="file"
                               accept="audio/wav,audio/mpeg,audio/mp4,audio/ogg"
@@ -1237,21 +1155,14 @@ export default function WorkspaceApp() {
                                 setAudioName("");
                                 change({ narration: null });
                               }}
-                            >
-                              Remove audio
-                            </button>
+                            >{t("Remove audio")}</button>
                           )}
                         </div>
                         {!draft.scriptConfirmed || dirty ? (
-                          <div className="cp-callout">
-                            This draft has changed. Confirm it to save a new
-                            version before rendering.
-                            <button
+                          <div className="cp-callout">{t("This draft has changed. Confirm it to save a new version before rendering.")}<button
                               className="cp-button cp-button-dark"
                               onClick={() => void confirm()}
-                            >
-                              Confirm this version
-                            </button>
+                            >{t("Confirm this version")}</button>
                           </div>
                         ) : (
                           <button
@@ -1260,8 +1171,8 @@ export default function WorkspaceApp() {
                           >
                             <Icon name="play" />
                             {video
-                              ? "Render again"
-                              : "Render 15-second preview"}
+                              ? t("Render again")
+                              : t("Render 15-second preview")}
                           </button>
                         )}
                         {video &&
@@ -1278,9 +1189,7 @@ export default function WorkspaceApp() {
                                   )
                                 }
                               >
-                                <Icon name="download" />
-                                Download MP4
-                              </button>
+                                <Icon name="download" />{t("Download MP4")}</button>
                               <button
                                 className="cp-button cp-button-outline"
                                 onClick={() =>
@@ -1293,9 +1202,7 @@ export default function WorkspaceApp() {
                                     );
                                   })
                                 }
-                              >
-                                Download preview package
-                              </button>
+                              >{t("Download preview package")}</button>
                               <button
                                 className="cp-text-button"
                                 onClick={() =>
@@ -1306,87 +1213,67 @@ export default function WorkspaceApp() {
                                     "captions.srt",
                                   )
                                 }
-                              >
-                                Download SRT captions
-                              </button>
+                              >{t("Download SRT captions")}</button>
                             </div>
                           )}
                         <div className="cp-context-note">
                           <Icon name="film" size={17} />
-                          <span>
-                            Internal preview, pending human creative review.
-                            Traffic / Website context is recorded; advertising
-                            budget, identity and destination URL are not
-                            configured.
-                          </span>
+                          <span>{t("Internal preview, pending human creative review. Traffic / Website context is recorded; advertising budget, identity and destination URL are not configured.")}</span>
                         </div>
                         <button
                           className="cp-text-button"
                           onClick={() => setStep(2)}
-                        >
-                          Edit storyboard
-                        </button>
+                        >{t("Edit storyboard")}</button>
                       </>
                     )}
                   </fieldset>
                   {rendering && (
                     <div className="cp-render-progress" role="status">
                       <div>
-                        <strong>
-                          Encoding your preview… {Math.round(progress * 100)}%
+                        <strong>{t("Encoding your preview…")}{Math.round(progress * 100)}%
                         </strong>
                         <button
                           className="cp-text-button"
                           onClick={() => controller.current?.abort()}
-                        >
-                          Cancel
-                        </button>
+                        >{t("Cancel")}</button>
                       </div>
                       <progress value={progress} max={1} />
-                      <small>
-                        Keep this page open. Your confirmed storyboard is
-                        already saved.
-                      </small>
+                      <small>{t("Keep this page open. Your confirmed storyboard is already saved.")}</small>
                     </div>
                   )}
                 </section>
                 <aside className="cp-preview-panel">
                   <div className="cp-preview-heading">
-                    <span>THE CREATIVE CANVAS</span>
+                    <span>{t("THE CREATIVE CANVAS")}</span>
                     <span className="cp-tag">
-                      {video ? "RENDERED" : "LIVE LAYOUT"}
+                      {t(video ? "RENDERED" : "LIVE LAYOUT")}
                     </span>
                   </div>
-                  <PhonePreview draft={draft} videoUrl={videoUrl} />
+                  <PhonePreview draft={draft} videoUrl={videoUrl} language={language} />
                   <div className="cp-preview-caption">
                     <Icon name="film" size={17} />
                     <span>
                       {video
-                        ? "Actual rendered MP4"
-                        : "Product image animation"}{" "}
+                        ? t("Actual rendered MP4")
+                        : t("Product image animation")}{" "}
                       · {draft.market} / {draft.locale}
                     </span>
                   </div>
                   <div className="cp-proof-card">
                     <div>
                       <Icon name="check" size={18} />
-                      <strong>Grounded in your product</strong>
+                      <strong>{t("Grounded in your product")}</strong>
                     </div>
                     <p>
-                      {confirmedCount} confirmed facts. One shared reference.
-                      <br />
+                      {confirmedCount}{t("confirmed facts. One shared reference.")}<br />
                       {draft.isSample
-                        ? "Fictional sample · vector illustration."
-                        : "Your uploaded image stays the visual source."}
+                        ? t("Fictional sample · vector illustration.")
+                        : t("Your uploaded image stays the visual source.")}
                     </p>
                   </div>
                   <div className="cp-demo-disclosure">
-                    <span>AN HONEST FIRST VERSION</span>
-                    <p>
-                      Directions are editable template suggestions, not live AI
-                      output. This demo spends no model credits and makes no
-                      advertising performance claims.
-                    </p>
+                    <span>{t("AN HONEST FIRST VERSION")}</span>
+                    <p>{t("Directions are editable template suggestions, not live AI output. This demo spends no model credits and makes no advertising performance claims.")}</p>
                   </div>
                 </aside>
               </div>
@@ -1394,22 +1281,20 @@ export default function WorkspaceApp() {
           )}
           {error && (
             <div className="cp-alert cp-alert-error" role="alert">
-              <strong>{error}</strong>
-              <button className="cp-text-button" onClick={reload}>
-                Reload saved project
-              </button>
+              <strong>{localizeNotice(language, error)}</strong>
+              <button className="cp-text-button" onClick={reload}>{t("Reload saved project")}</button>
             </div>
           )}
           {message && (
             <div className="cp-alert cp-alert-success" role="status">
               <Icon name="check" size={18} />
-              {message}
+              {localizeNotice(language, message)}
             </div>
           )}
         </main>
         <footer className="cp-bottom">
-          <span>Creative Passport · First working version</span>
-          <span>Creative hypotheses. Human decisions.</span>
+          <span>{t("Creative Passport · First working version")}</span>
+          <span>{t("Creative hypotheses. Human decisions.")}</span>
         </footer>
       </div>
     </div>
