@@ -1,89 +1,81 @@
-# Brand Anchor Studio — product app
+# Creative Passport — Web Product
 
-The customer-facing application for Brand Anchor Studio. The existing Python/Streamlit application at the repository root remains the internal experimentation lab where the anchor mechanism was first validated (see `../PROJECT_GROUND_TRUTH.md`).
+A browser-based advertising creative workspace for cross-border brands. It turns product information and confirmed facts into market-specific creative directions, editable storyboards, and downloadable 15-second videos.
 
-Deploying for the first external invite? See [DEPLOYMENT.md](./DEPLOYMENT.md).
+**[Open the deployed private workspace](https://creative-passport-cathy-demo.cyxcathy0418.chatgpt.site)** · [Demo guide](./docs/DEMO_V1.md)
 
-## What's built (Phase 0–3)
+## Current deployed experience
 
-- Public landing page at `/`; invite-only email login at `/login` (plus a
-  dev-only anonymous login gated by `DEV_LOGIN_ENABLED`, never available in
-  production).
-- Product workspace at `/dashboard`; private 1–3 image upload and product
-  brief at `/products/new`; Zod-validated, editable ProductSpec at
-  `/products/[id]/spec`.
-- Creative batch creation (legacy `campaigns`, not TikTok advertising Campaigns) and multi-market creative derivation at
-  `/products/[id]/campaigns/new` and `/campaigns/[id]/creatives`.
-- Reference-image-conditioned ad image generation (OpenAI `images.edit`,
-  never text-only) and a side-by-side reference/output comparison view at
-  `/campaigns/[id]/assets`, with single-image and packaged-ZIP download.
-- Supabase-native tables, RLS and private Storage throughout; every billable
-  OpenAI call (Spec extraction, creative derivation, image generation) sits
-  behind its own `OPENAI_*_ENABLED` feature flag, default `false`.
-- Verified once end-to-end against the real OpenAI API (not just the mocked
-  test suite) — see the "Live end-to-end verification" note in
-  [SUPABASE_SETUP.md](./SUPABASE_SETUP.md).
+The creator can sign in with their ChatGPT account and complete the workflow:
 
-## Roadmap — planned, not yet done
+Product and facts → three creative directions → four-shot storyboard → confirmation → actual video rendering → revision and export.
 
-These are real gaps, written here so the plan is visible before it's built,
-not backfilled after:
+- Switch between English and Chinese interface copy without changing the market or saved advertising content.
+- Work with United States / English or Mexico / Spanish market contexts.
+- Confirm facts and sources before generating a storyboard; preserve evidence snapshots on the relevant shots.
+- Edit captions, lock shots, retain confirmed versions, and restore a version as a new draft.
+- Encode a 15-second, 1080 × 1920, 30 fps H.264 MP4 in the browser, optionally with user-uploaded narration.
+- Download MP4, SRT, and an internal preview package.
+- Save product inputs, scripts, and versions through the deployed backend. Videos are cached on the current device and can be recreated from the saved inputs.
 
-- **Quality eval set before inviting outside users**: 10–12 real products
-  across all five `brandMarking` types × 2 markets each, human-scored on the
-  existing 5-dimension fidelity rubric, with hard-fail checks (wrong product,
-  hallucinated brand marks, copy-placeholder leaks, compliance violations).
-  Designed, not yet run.
-- **Platform-specific creative differentiation**: `platform` is currently a
-  free-text field with no structured policy behind it (unlike
-  `MARKET_LOCALIZATION_POLICIES`). A `PLATFORM_POLICIES` table (aspect
-  ratio, hook pacing, marketplace image-content rules) is designed but not
-  implemented.
-- **Observability**: no LangSmith/tracing in this app (the Python lab used
-  LangGraph + LangSmith; this app calls the OpenAI SDK directly with
-  hand-rolled bounded retries). Per-call token usage/cost is stored in
-  Postgres, but there's no step-by-step trace view.
-- **Billing**: no Stripe/credits. Deliberately deferred until invite-only
-  Beta usage validates real demand — see `../HANDOFF.md` for the reasoning.
-- **Production deployment**: not deployed yet. Deploying on Vercel (matching
-  the original PRD; unused Cloudflare/wrangler/Drizzle scaffolding that
-  predated this decision has been removed). Before any external invite:
-  disable Supabase anonymous sign-in and self-registration, configure a
-  real SMTP provider (current one is dev-only, low quota), and add OpenAI
-  usage alerts.
+Creative suggestions currently use clearly labeled templates. The deployed demo does not call paid models. Its access boundary is creator-only; the application's Supabase email-invitation flow is a separate integration.
 
-## Local development
+## Shared implementation
 
-Requirements: Node.js 22.13 or newer.
+The Next.js `/demo` entry point and the standalone hosting adapter share the same React workspace, Zod schemas, workflow service, and media modules.
 
-```powershell
-npm.cmd ci
-npm.cmd run dev
+| Directory | Responsibility |
+|---|---|
+| `components/passport-demo/` | Bilingual workspace, interface copy, and responsive styling |
+| `lib/passport-demo/` | Facts, directions, storyboard validation, persistence adapters, rendering, and artifact caching |
+| `demo-host/` | Standalone frontend build and HTTP / storage adapters |
+| `app/demo/` | Next.js demo entry point |
+| `supabase/migrations/` | Existing product schema and Creative Passport data foundations |
+
+The deployed adapter uses a Cloudflare Worker with private R2-backed storage through Sites. The local standalone server uses a development-only file store. The original Next.js / Supabase application remains in this directory.
+
+## Run the standalone demo
+
+Requirements: Node.js 22.13 or newer. Check out `feature/creative-passport` first.
+
+```bash
+npm ci
+npm run demo:build
+npm run demo:dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://127.0.0.1:4173`. No model credentials are required for this template-based demo. See [DEMO_V1.md](./docs/DEMO_V1.md) for hosting preparation and verification boundaries.
 
-Copy `.env.example` to `product-app/.env.local` and fill in your own Supabase test-project values. This file is ignored by Git; blank placeholders do not connect a project. See [SUPABASE_SETUP.md](./SUPABASE_SETUP.md) for the current login decision and live extraction gate.
+## Run the Next.js application
+
+```bash
+npm ci
+npm run dev
+```
+
+Open `http://localhost:3000`. Copy `.env.example` to `.env.local` and configure your own isolated Supabase test project for protected product routes. Keep model secrets server-side and keep billable feature flags disabled until a live test is explicitly authorized. Blank configuration does not connect a service.
+
+The existing application includes product upload, editable ProductSpec, creative-batch derivation, reference-image-conditioned generation, and private asset export. Source code for these integrations does not mean that each service is enabled in the current demo environment. See [Supabase setup](./SUPABASE_SETUP.md) and the [Next.js deployment checklist](./DEPLOYMENT.md).
 
 ## Checks
 
-```powershell
-npm.cmd run lint
-npm.cmd run test
+```bash
+npm test
 ```
 
-`npm run test` performs a production build plus 50 automated tests covering
-ProductSpec/campaign schema boundaries, creative derivation, image-generation
-retries, ZIP packaging, authorization/RLS assumptions, and route-level smoke
-tests. It does not call OpenAI — the live extraction/derivation/generation
-gates above cover that separately.
+The current suite builds the Next.js application and runs 64 automated checks. External credentials are cleared and paid model calls are disabled. Checks cover product schemas, authorization assumptions, routes, market mappings, data foundations, source-backed demo workflows, version boundaries, and export behavior.
 
-## Creative Passport — foundation only
+## Product data foundations
 
-The `feature/creative-passport` branch adds projects, source-backed facts, immutable Spec/creative revisions, normalized market/locale data (including Mexico), and independent Campaign → Ad Group → Ad draft tables. Existing `campaigns` IDs and routes remain creative batches. The current UI can also create a one-market batch. New project/draft workflow screens are not built in this step.
+Creative Passport adds projects, source-backed facts, immutable Spec / creative revisions, normalized markets and locales, and separate Campaign → Ad Group → Ad draft tables. Existing `campaigns` records and routes remain legacy creative batches.
 
-See [CREATIVE_PASSPORT_FOUNDATION.md](./CREATIVE_PASSPORT_FOUNDATION.md) for migration and verification boundaries.
+Foundation migrations have been checked locally in an isolated PGlite database; that is distinct from deployment to a hosted Supabase project. The complete advertising-draft interface is part of the broader product scope. Historical implementation details remain in [CREATIVE_PASSPORT_FOUNDATION.md](./CREATIVE_PASSPORT_FOUNDATION.md).
 
-## Creative Passport first demo
+## Next product stages
 
-Open the [deployed private demo](https://creative-passport-cathy-demo.cyxcathy0418.chatgpt.site) with the creator's ChatGPT account. It uses the same workflow modules as `/demo` in this Next.js app. Directions are labeled templates; video encoding is real and happens in the browser, with no paid model calls. The hosting adapter provides private R2-backed project/version storage; the original Supabase product is preserved. See [demo scope and local commands](./docs/DEMO_V1.md).
+- Connect a real text provider for fact-grounded directions, scripts, and local revisions, with recorded usage and bounded costs.
+- Complete invite-only email access, private multi-project workspaces, and per-user quotas.
+- Add persistent production jobs, speech synthesis, recovery, and cloud video storage.
+- Extend Campaign / Ad Group / Ad draft editing and asset associations.
+
+The original Python / Streamlit lab stays at the repository root and continues to use Pydantic. The web workflow uses TypeScript and Zod. The full internal product requirements remain in [Creative-Passport-PRD.md](./docs/Creative-Passport-PRD.md).

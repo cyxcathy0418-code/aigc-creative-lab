@@ -1,53 +1,81 @@
-# Creative Passport 第一版演示范围
+# Creative Passport — First Working Demo
 
-依据：Creative-Passport-PRD.md。用户已确认先完成可在线使用的最小闭环，再扩展完整 PRD；本轮不进行付费模型测试。
+This release follows the Creative Passport PRD and delivers a deployed workflow before the remaining product capabilities. No paid model tests were performed for this release.
 
-## 本轮交付
+## Workflow
 
-一个商品、US/en-US 或 MX/es-MX：商品图与资料 → 人工确认有来源的事实 → 三个待验证方向 → 选择、编辑四镜头脚本 → 确认 → 实际合成 15 秒竖版 MP4 → 局部修改、新版本、下载视频/SRT/内部素材包。
+One product in US/en-US or MX/es-MX:
 
-创意提供器首版使用明确标注的规则模板，不冒充实时大模型。字幕视频无自动配音；可选上传自己的配音，超时须修正。模型适配器保留接口，开关默认关闭，费用明确为 0 美元。
+Product image and brief → human confirmation of source-backed facts → three creative hypotheses → selection and editing of a four-shot storyboard → confirmation → actual 15-second vertical MP4 encoding → local revisions, saved versions, and MP4 / SRT / preview-package export.
 
-## 实现边界
+The initial creative provider uses explicitly labeled templates. Default videos are silent with captions; users may upload narration they have the right to use. Overlong audio must be corrected. Provider interfaces remain available for later model integration, and current model spend is $0.00.
 
-- 保留现有 Next.js/Supabase 产品和步骤1–2的数据库，新增 /demo，不改旧 campaigns 语义。
-- Next.js 与上线演示共用 React 工作台、Schema、方向/脚本服务和素材合成模块。独立部署入口只适配 HTTP 与存储，不另写一套业务逻辑。
-- 演示托管为带后端的 Worker，借助 Sites 的登录边界及稳定用户 ID，私有 R2 保存项目与不可覆盖的已确认版本；乐观并发冲突返回 409。
-- 浏览器使用 WebCodecs/Mediabunny 逐帧合成真实 H.264 MP4。需保持页面打开；这一版不宣称已有服务端无人值守视频队列。后续把同一输入快照交给服务器渲染 Worker。
-- 原始图在私有项目中保存。视频 Blob 在当前设备 IndexedDB 中缓存，可重新从保存的脚本和图重建；跨设备视频文件云端同步是后续工作。
-- 本地开发用独立文件存储适配器，不把演示数据写进生产 Supabase；上线使用 Sites 认证，不能相信来自普通 Next.js 请求的身份头。
-- 正式邀请登录、完整预算预留、B0/B1正式评测、投放配置页和外部评价仍按 PRD 迭代。本版素材包标为内部预览，不能冒充已审核广告。
+## Implementation boundaries
 
-## 最小验收
+- The existing Next.js / Supabase application and foundation schema are preserved. `/demo` is an additional entry point; legacy `campaigns` records remain creative batches.
+- The Next.js page and hosted demo share the React workspace, schemas, creative service, and media modules. The separate hosting entry point adapts HTTP and storage rather than duplicating business logic.
+- The hosted backend uses a Worker, Sites authentication, stable user IDs, and private R2 storage for projects and immutable confirmed versions. Conflicting saves return HTTP 409.
+- WebCodecs and Mediabunny encode an actual H.264 MP4 in the browser. Keep the page open until encoding finishes. Persistent server-side rendering jobs are a future production capability.
+- Product images are saved with the private project. Video blobs are cached in device-local IndexedDB and can be recreated from saved scripts and images. Cross-device cloud video synchronization is a separate capability.
+- The local development server uses a single-process file-store adapter. It does not write into the original production Supabase project. Ordinary Next.js requests must not trust the hosted adapter's identity header.
+- Supabase email invitations, full cost reservations, advertising-draft screens, and external feedback remain part of the broader PRD. Exported demo packages are marked as internal previews pending human review.
 
-1. 有来源且人工确认的事实才可生成脚本；方向注明假设，不推断民族偏好。
-2. 一次真实视频导出，15秒、9:16、1080×1920、30fps，字幕可下载；文字溢出或音频超时阻止导出。
-3. 编辑后必须重新确认；旧版本保留，锁定镜头的内容和素材引用保持不变。
-4. 刷新后从后端恢复资料与脚本；多标签页冲突不静默覆盖；不同用户不可读写彼此资料。
-5. 网页和后端部署，核对上线结果；不调用付费模型，不填写模拟效果成绩。
+## Acceptance criteria
 
-## 执行顺序
+1. Storyboards can use only sourced, human-confirmed facts. Directions are labeled hypotheses rather than assumptions about national preferences.
+2. Export a real 15-second, 9:16, 1080 × 1920, 30 fps video and downloadable captions. Caption overflow and overlong narration block export.
+3. Edits require reconfirmation. Previous versions remain intact; locked shots preserve their contents and asset references.
+4. Reload restores the project and script from the backend. Concurrent saves do not silently overwrite data, and ownership is checked on every request.
+5. Deploy the frontend and backend, verify the online result, and perform no paid model calls or simulated advertising-performance reporting.
 
-- [x] 共享工作流 Schema、提供器接口、服务端持久化与最小测试。
-- [x] 英文工作台、事实/方向/脚本/历史交互及实际媒体合成。
-- [x] Next.js入口与独立托管适配、浏览器完整流程检查、修复、部署、代码同步。
+## Implemented
 
-## 当前验证与边界
+- Shared schemas, provider interfaces, server-side persistence, and workflow checks.
+- Bilingual workspace, facts / directions / storyboard / history interactions, and actual media encoding.
+- Shared Next.js and standalone hosting adapters, browser workflow verification, deployment, and source synchronization.
 
-已实际导出并在浏览器读到 15 秒、1080×1920 的 MP4，检查了 ZIP 中的视频、SRT、脚本和演示标识；刷新能恢复项目与本机视频。复查补上事实内容快照、空事实确认、缓存恢复时序、跨市场自定义文案保留和锁定镜头的显式重置/历史恢复。
+## Verification
 
-本次不验证任何付费供应商。托管数据通过 Sites 的私有访问和用户 ID 隔离；Next.js 本地文件适配器仅用于单进程开发。独立测试 Supabase 项目留待正式登录/模型集成阶段建立，未恢复原暂停项目。
+An actual MP4 was rendered and inspected as 15 seconds at 1080 × 1920. The preview ZIP contained the video, SRT, script manifest, and demo disclosure. Reload restored both the project and the local video cache.
 
-设备视频缓存不等于云端文件同步；浏览器存储满时可能不能恢复缓存视频，应先下载，仍可从后端保存的图与脚本重建。旧 LoginForm 留有一条导航 lint 警告。
+Review fixes covered captured fact evidence, confirmation of incomplete facts, cache-recovery ordering, preservation of custom copy across market switches, and explicit reset / restore rules for locked shots.
 
-## 运行与部署
+On November 25, 2026, online Chrome verification covered creator login, fact confirmation, three directions, four-shot storyboard creation, confirmed version saving, restoration after reload, video encoding, and MP4 download. The downloaded file was 4,073,063 bytes, 15 seconds, and 1080 × 1920. The browser automation's download-event wait timed out, but the downloaded file was independently verified; no corresponding product download failure was found.
 
-界面支持右上角 EN / 中文一键切换，语言偏好保存在当前浏览器；导航、四步工作流、提示与版本记录均提供中文。界面语言独立于投放市场，不翻译或改写用户已输入的商品事实、广告文案、配音及已保存版本。视觉更新为深绿侧栏、浅色编辑区和更清晰的字号层级，并适配窄屏。
+The existing suite passed all 64 automated checks, and the production build succeeded. English / Chinese switching, preference persistence, retention of the original script and shot locks, history / about pages, and a 390 px-wide layout were checked in the browser. The deployed Chinese interface restored its saved version and cached video after reload.
 
-已部署的第一版（仅创建者可访问）：https://creative-passport-cathy-demo.cyxcathy0418.chatgpt.site 。首次访问使用创建者的 ChatGPT 账号登录。主仓库继续使用 `feature/creative-passport`；正式 Next.js 页面入口是 `/demo`。
+No paid provider was tested. The original paused Supabase project was not resumed or modified. The local file-store adapter is for single-process development; it is not a substitute for hosted authentication or database verification. The legacy LoginForm retains a navigation lint warning.
 
-在 `product-app` 中先 `npm ci`，再 `npm run demo:build` 和 `npm run demo:dev`，本地地址为 `http://127.0.0.1:4173`。执行 `npm run demo:prepare -- /独立的站点源码目录` 可将同一套组件与服务准备为托管源，避免更改原仓库的 Git remote。站点身份保存在 `demo-host/.openai/hosting.json`，后续部署复用此身份，不重新创建站点。
+## Language and visual design
 
-构建与 64 项自动化检查通过；本地实际视频和素材包已验证。2026-11-25 已在 Chrome 完成线上验收：创建者登录、事实确认、三个创意方向、四镜头脚本、确认版本保存、刷新后恢复同一脚本及版本记录、实际视频合成和 MP4 下载。下载文件解析结果为 15 秒、1080×1920，大小 4,073,063 字节。浏览器工具等待下载事件曾超时，但已核实文件实际下载完成；未发现对应的产品下载故障。旧项目与 Supabase 暂停环境未改动。
+The top-right EN / Chinese button switches interface language and remembers the preference in the current browser. Navigation, workflow steps, notices, and history are localized. Switching interface language does not translate or rewrite product facts, advertising copy, uploaded narration, or saved versions. Advertising language follows the target market.
 
-当前可由创建者登录后现场演示；面试官不能直接凭链接访问。需要他人独立试用时，再配置访客访问方式。项目资料和版本由后端保存，视频文件仍仅缓存于生成它的设备，应及时下载。
+The workspace uses a dark evergreen sidebar, light editing surfaces, clear typography, and responsive layouts.
+
+## Run and deploy
+
+Live creator-only workspace: https://creative-passport-cathy-demo.cyxcathy0418.chatgpt.site
+
+Use the creator's ChatGPT account for the initial sign-in. The current application source is on `feature/creative-passport`; the Next.js entry point is `/demo`.
+
+From `product-app`:
+
+```bash
+npm ci
+npm run demo:build
+npm run demo:dev
+```
+
+Local URL: `http://127.0.0.1:4173`.
+
+Prepare an independent hosting checkout with:
+
+```bash
+npm run demo:prepare -- /absolute/path/to/site-checkout
+```
+
+This copies shared frontend and backend source without changing the main repository's Git remote. The Site identity is retained in `demo-host/.openai/hosting.json`; updates reuse that identity rather than creating a new Site. Environment files, runtime records, and credentials are not copied.
+
+The deployed workspace supports creator-led demonstrations. Interviewers currently cannot access it with the link alone; independent trial access needs an explicit visitor or application-auth configuration.
+
+Project inputs and versions are backend-persisted. Video files remain cached on the generating device and should be downloaded promptly. If device storage is full, cache recovery may fail; the saved image and storyboard still allow the video to be recreated.
